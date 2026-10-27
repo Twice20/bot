@@ -1,1 +1,2187 @@
+--[[
+    ██╗   ██╗███╗   ███╗██████╗ ██████╗ ███████╗██╗     ██╗      █████╗
+    ██║   ██║████╗ ████║██╔══██╗██╔══██╗██╔════╝██║     ██║     ██╔══██╗
+    ██║   ██║██╔████╔██║██████╔╝██████╔╝█████╗  ██║     ██║     ███████║
+    ██║   ██║██║╚██╔╝██║██╔══██╗██╔══██╗██╔══╝  ██║     ██║     ██╔══██║
+    ╚██████╔╝██║ ╚═╝ ██║██████╔╝██║  ██║███████╗███████╗███████╗██║  ██║
+     ╚═════╝ ╚═╝     ╚═╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝
 
+    UmbrellaFan  |  Loader + Menu  |  Murder Mystery 2
+    Roblox LocalScript (ПК + телефон), порт ImGui-интерфейса 1:1
+    Telegram: @umbrellafan  ->  https://t.me/umbrellafan
+
+    Ключ: см. @umbrellafan
+    Клавиша меню по умолчанию: INSERT (на телефоне - полоска сверху экрана)
+]]
+
+local UIS          = game:GetService("UserInputService")
+local GuiService   = game:GetService("GuiService")
+local LP = game:GetService("Players").LocalPlayer
+
+local WHITE, BLACK = Color3.new(1, 1, 1), Color3.new(0, 0, 0)
+local clamp, floor, sin, cos, sqrt, abs, max, min, exp, pi =
+    math.clamp, math.floor, math.sin, math.cos, math.sqrt, math.abs, math.max, math.min, math.exp, math.pi
+
+local TG_HANDLE = "@umbrellafan"
+local TG_URL    = "https://t.me/umbrellafan"
+
+-- ============================================================ single instance
+local ENV
+do
+    local ok, g = pcall(function() return getgenv() end)
+    ENV = (ok and type(g) == "table") and g or _G
+end
+if ENV.__UmbrellaFan and ENV.__UmbrellaFan.Destroy then
+    pcall(ENV.__UmbrellaFan.Destroy)
+end
+
+local Conns = {}
+local function Con(sig, fn)
+    local c = sig:Connect(fn)
+    Conns[#Conns + 1] = c
+    return c
+end
+
+-- ============================================================ platform
+-- телефон = есть тач и нет клавиатуры; всё остальное считаем ПК
+local IS_MOBILE = UIS.TouchEnabled and not UIS.KeyboardEnabled
+
+-- ============================================================ gui root
+local function GuiParent()
+    local ok, h = pcall(function() return gethui and gethui() end)
+    if ok and typeof(h) == "Instance" then return h end
+    local t = Instance.new("ScreenGui")
+    local ok2 = pcall(function() t.Parent = game:GetService("CoreGui") end)
+    t:Destroy()
+    if ok2 then return game:GetService("CoreGui") end
+    return LP:WaitForChild("PlayerGui")
+end
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "UmbrellaFan"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = true
+Gui.DisplayOrder = 1000000
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() Gui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets end)
+Gui.Parent = GuiParent()
+
+local function VP()
+    local s = Gui.AbsoluteSize
+    if s.X < 10 or s.Y < 10 then
+        local c = workspace.CurrentCamera
+        s = c and c.ViewportSize or Vector2.new(1280, 720)
+    end
+    return s
+end
+
+-- ============================================================ time / registries
+local DT, NOW = 1 / 60, 0
+local Static, Groups = {}, {}
+local Ver, DoneVer = 1, 0
+local Tips, Drags = {}, {}
+
+local function Stat(fn) fn(); Static[#Static + 1] = fn end
+local function Group(isOn)
+    local g = { dyn = {}, on = isOn or function() return true end }
+    Groups[#Groups + 1] = g
+    return g
+end
+local function Dyn(g, fn) g.dyn[#g.dyn + 1] = fn end
+
+-- ============================================================ palette (menu)
+local function RGB(r, g, b) return Color3.fromRGB(clamp(r, 0, 255), clamp(g, 0, 255), clamp(b, 0, 255)) end
+local function Mix(a, b, t) return a:Lerp(b, clamp(t, 0, 1)) end
+local function Shade(c, k) if k >= 0 then return c:Lerp(WHITE, k) end return c:Lerp(BLACK, -k) end
+local function LogoLight(acc) local h, s = acc:ToHSV() return Color3.fromHSV(h, 0.23 * s, 1) end
+
+local function MakePal(base, acc, light)
+    local p = { accent = acc, logoLight = LogoLight(acc) }
+    if not light then
+        p.rail = base; p.side = Shade(base, 0.014); p.content = Shade(base, -0.50)
+        p.border1 = Shade(base, 0.075); p.border2 = Shade(base, 0.035); p.outer = Shade(base, 0.065)
+        p.card = Shade(base, -0.28); p.cardBorder = Shade(base, 0.03); p.sep = Shade(base, 0.04)
+        p.sel = Mix(Shade(base, 0.05), acc, 0.14); p.combo = Shade(base, 0.027); p.comboHover = Shade(base, 0.06)
+        p.text = RGB(175, 175, 175); p.textBright = RGB(245, 245, 245); p.title = RGB(142, 142, 142)
+        p.sideText = RGB(150, 153, 163); p.railIcon = RGB(204, 207, 221); p.crumb = RGB(84, 89, 100)
+        p.placeholder = RGB(111, 111, 111); p.iconOff = RGB(102, 102, 102)
+        p.offTrack = Shade(base, 0.04); p.knobOff = RGB(102, 102, 102); p.sliderBg = Shade(base, 0.09)
+        p.knob = RGB(255, 255, 255)
+        p.popup = Shade(base, 0.01); p.popupBorder = Shade(base, 0.08)
+        p.keyBox = Shade(base, 0.09); p.keyText = RGB(172, 172, 172)
+        p.win = Shade(base, -0.50); p.winBorder = Shade(base, 0.03); p.searchBorder = Shade(base, 0.02)
+        p.backdropTop = Mix(Shade(base, -0.25), acc, 0.05); p.backdropBottom = Shade(base, -0.68)
+    else
+        p.rail = base; p.side = RGB(238, 238, 240); p.content = RGB(226, 226, 230)
+        p.border1 = RGB(214, 214, 219); p.border2 = RGB(218, 218, 222); p.outer = RGB(205, 205, 210)
+        p.card = RGB(247, 247, 248); p.cardBorder = RGB(218, 218, 222); p.sep = RGB(230, 230, 233)
+        p.sel = Mix(RGB(222, 226, 230), acc, 0.12); p.combo = RGB(234, 235, 238); p.comboHover = RGB(224, 226, 230)
+        p.text = RGB(78, 78, 82); p.textBright = RGB(18, 18, 20); p.title = RGB(120, 120, 126)
+        p.sideText = RGB(92, 95, 105); p.railIcon = RGB(70, 72, 82); p.crumb = RGB(140, 145, 155)
+        p.placeholder = RGB(140, 140, 145); p.iconOff = RGB(165, 165, 170)
+        p.offTrack = RGB(222, 223, 227); p.knobOff = RGB(170, 170, 175); p.sliderBg = RGB(220, 222, 228)
+        p.knob = RGB(255, 255, 255)
+        p.popup = RGB(250, 250, 251); p.popupBorder = RGB(214, 214, 218)
+        p.keyBox = RGB(226, 228, 233); p.keyText = RGB(60, 60, 64)
+        p.win = RGB(240, 240, 242); p.winBorder = RGB(210, 210, 214); p.searchBorder = RGB(222, 222, 226)
+        p.backdropTop = RGB(70, 66, 70); p.backdropBottom = RGB(30, 30, 34)
+    end
+    return p
+end
+
+local THEMES = {
+    { base = RGB(20, 20, 25),    acc = RGB(35, 139, 28),   light = false },
+    { base = RGB(232, 232, 236), acc = RGB(35, 139, 28),   light = true  },
+    { base = RGB(17, 23, 21),    acc = RGB(52, 199, 126),  light = false },
+    { base = RGB(24, 17, 20),    acc = RGB(219, 64, 82),   light = false },
+    { base = RGB(21, 19, 29),    acc = RGB(134, 104, 232), light = false },
+    { base = RGB(16, 19, 27),    acc = RGB(79, 140, 222),  light = false },
+}
+local NTHEME = #THEMES
+
+-- ============================================================ settings state
+local function DefaultLang()
+    local ok, id = pcall(function() return LP.LocaleId end)
+    if ok and type(id) == "string" and id:sub(1, 2):lower() == "en" then return "en" end
+    return "ru"
+end
+
+local st = {
+    menuKey = Enum.KeyCode.Insert,
+    lang = DefaultLang(),            -- "ru" | "en"
+    animDur = 100,
+    blur = 0.30,
+    disableShadows = true,
+    scaleIdx = 1,                    -- 1 = Auto, 2..6 = 100..200
+    theme = 1,                       -- 1..6 пресеты, 7 = свой цвет
+    customAccent = Color3.fromRGB(35, 139, 28),
+}
+
+local PT = MakePal(THEMES[1].base, THEMES[1].acc, false)
+local P = {}
+for k, v in pairs(PT) do P[k] = v end
+
+local function ApplyTheme(instant)
+    if st.theme >= 1 and st.theme <= NTHEME then
+        local t = THEMES[st.theme]
+        PT = MakePal(t.base, t.acc, t.light)
+    else
+        PT = MakePal(THEMES[1].base, st.customAccent, false)
+    end
+    if instant then for k, v in pairs(PT) do P[k] = v end Ver = Ver + 1 end
+end
+
+local function StepCh(f, t, k)
+    f = floor(f * 255 + 0.5); t = floor(t * 255 + 0.5)
+    local d = t - f
+    local s = floor(d * k + 0.5)
+    if s == 0 and d ~= 0 then s = d > 0 and 1 or -1 end
+    return (f + s) / 255
+end
+
+local function TickPalette()
+    local k = 1 - exp(-14 * DT / (max(10, st.animDur) / 100))
+    local changed = false
+    for key, dst in pairs(PT) do
+        local cur = P[key]
+        if cur ~= dst then
+            P[key] = Color3.new(StepCh(cur.R, dst.R, k), StepCh(cur.G, dst.G, k), StepCh(cur.B, dst.B, k))
+            changed = true
+        end
+    end
+    if changed then Ver = Ver + 1 end
+end
+
+-- ============================================================ i18n
+local RU = {
+    ["World"] = "Мир", ["Heroes"] = "Герои", ["Info Screen"] = "Инфо экран", ["Abilities"] = "Способности",
+    ["Effects"] = "Эффекты", ["Utility"] = "Утилиты", ["Scripts"] = "Скрипты", ["Cloud"] = "Облако",
+    ["Combat"] = "Бой", ["Visual"] = "Визуалы", ["Misc"] = "Разное",
+    ["Search"] = "Поиск", ["Settings"] = "Настройки", ["Main"] = "Основное", ["Appearance"] = "Внешний вид",
+    ["Menu Bind"] = "Бинд меню", ["Language"] = "Язык", ["Animation Duration"] = "Длит. анимации",
+    ["Menu Blur Factor"] = "Размытие фона", ["Disable Shadows"] = "Отключить тени", ["Menu Scale"] = "Масштаб меню",
+    ["Theme"] = "Тема", ["Custom color"] = "Свой цвет", ["Auto"] = "Авто",
+    ["Press a key... (Esc = cancel)"] = "Нажмите клавишу... (Esc = отмена)",
+    ["Press"] = "Нажмите", ["to open the menu"] = "чтобы открыть меню",
+    ["Tap the strip at the top to open the menu"] = "Нажмите на полоску сверху, чтобы открыть меню",
+}
+local function T(s)
+    if st.lang == "ru" then return RU[s] or s end
+    return s
+end
+local function TR(ru, en) return st.lang == "ru" and ru or en end
+
+-- ============================================================ animation
+local Anims = {}
+-- меню: скорость зависит от "Animation Duration"
+local function Anim(key, target, speed)
+    speed = speed or 14
+    local v = Anims[key]
+    if v == nil then Anims[key] = target; return target end
+    local dur = max(10, st.animDur) / 100
+    v = v + (target - v) * (1 - exp(-speed * DT / dur))
+    if abs(target - v) < 0.002 then v = target end
+    Anims[key] = v
+    return v
+end
+-- лоадер: фиксированная скорость
+local function LAnim(key, target, speed)
+    speed = speed or 14
+    local v = Anims[key]
+    if v == nil then Anims[key] = target; return target end
+    v = v + (target - v) * (1 - exp(-speed * DT))
+    if abs(target - v) < 0.001 then v = target end
+    Anims[key] = v
+    return v
+end
+local function Sat(x) return clamp(x, 0, 1) end
+
+-- ============================================================ fonts
+local FAMILY
+do
+    local ok, f = pcall(function() return Font.fromEnum(Enum.Font.Roboto).Family end)
+    FAMILY = ok and f or Font.fromEnum(Enum.Font.SourceSans).Family
+end
+local FONT = {
+    R  = Font.new(FAMILY, Enum.FontWeight.Regular,  Enum.FontStyle.Normal),
+    M  = Font.new(FAMILY, Enum.FontWeight.Medium,   Enum.FontStyle.Normal),
+    SB = Font.new(FAMILY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal),
+    B  = Font.new(FAMILY, Enum.FontWeight.Bold,     Enum.FontStyle.Normal),
+}
+local TWc = {}
+local function TW(s, size, mul)
+    local k = s .. "|" .. size
+    local v = TWc[k]
+    if not v then
+        local ok, sz = pcall(function() return game:GetService("TextService"):GetTextSize(s, size, Enum.Font.Roboto, Vector2.new(10000, 1000)) end)
+        v = ok and sz.X or (#s * size * 0.55)
+        TWc[k] = v
+    end
+    return v * (mul or 1)
+end
+
+-- ============================================================ instance helpers
+local function Corner(o, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = (typeof(r) == "UDim") and r or UDim.new(0, r)
+    c.Parent = o
+    return c
+end
+local function Stroke(o, col, th, tr)
+    local s = Instance.new("UIStroke")
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Color = col or WHITE
+    s.Thickness = th or 1
+    s.Transparency = tr or 0
+    s.Parent = o
+    return s
+end
+local function Frame(parent, x, y, w, h, col, r)
+    local f = Instance.new("Frame")
+    f.BorderSizePixel = 0
+    f.Position = UDim2.fromOffset(x, y)
+    f.Size = UDim2.fromOffset(w, h)
+    if col then f.BackgroundColor3 = col else f.BackgroundTransparency = 1 end
+    if r and r ~= 0 then Corner(f, r) end
+    f.Parent = parent
+    return f
+end
+local CIRC = UDim.new(0.5, 0)
+local function Circ(parent, cx, cy, r, col)
+    return Frame(parent, cx - r, cy - r, r * 2, r * 2, col, CIRC)
+end
+local function Line(parent, x1, y1, x2, y2, th, col, round)
+    local dx, dy = x2 - x1, y2 - y1
+    local len = sqrt(dx * dx + dy * dy)
+    local f = Instance.new("Frame")
+    f.BorderSizePixel = 0
+    f.AnchorPoint = Vector2.new(0.5, 0.5)
+    f.Position = UDim2.fromOffset((x1 + x2) / 2, (y1 + y2) / 2)
+    f.Size = UDim2.fromOffset(len + (round and th or 0), th)
+    f.Rotation = math.deg(math.atan2(dy, dx))
+    f.BackgroundColor3 = col or WHITE
+    if round then Corner(f, th / 2) end
+    f.Parent = parent
+    return f
+end
+-- текст, вертикально центрирован на cy. align: 0 лево, 0.5 центр, 1 право
+local function Lab(parent, text, size, x, cy, col, weight, align, w, fade)
+    local l = Instance.new("TextLabel")
+    align = align or 0
+    l.BackgroundTransparency = 1
+    l.BorderSizePixel = 0
+    l.FontFace = FONT[weight or "R"]
+    l.TextSize = size
+    l.TextColor3 = col or WHITE
+    l.AnchorPoint = Vector2.new(align, 0.5)
+    l.Position = UDim2.fromOffset(x, cy)
+    l.Size = UDim2.fromOffset(w or 400, size + 8)
+    l.TextXAlignment = align == 0 and Enum.TextXAlignment.Left or (align == 1 and Enum.TextXAlignment.Right or Enum.TextXAlignment.Center)
+    l.TextYAlignment = Enum.TextYAlignment.Center
+    l.TextWrapped = false
+    if w and fade and fade > 0 and fade < w then
+        local g = Instance.new("UIGradient")
+        g.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(1 - fade / w, 0),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        g.Parent = l
+    end
+    if type(text) == "function" then
+        Stat(function() local t = text(); if l.Text ~= t then l.Text = t end end)
+    else
+        l.Text = text
+    end
+    l.Parent = parent
+    return l
+end
+
+-- ============================================================ input helpers
+local function Hit(parent, x, y, w, h)
+    local b = Instance.new("TextButton")
+    b.Text = ""
+    b.AutoButtonColor = false
+    b.BackgroundTransparency = 1
+    b.BorderSizePixel = 0
+    b.Position = UDim2.fromOffset(x, y)
+    b.Size = UDim2.fromOffset(w, h)
+    b.Parent = parent
+    local s = { btn = b, hov = false, down = false, t = 0 }
+    b.MouseEnter:Connect(function() s.hov = true end)
+    b.MouseLeave:Connect(function() s.hov = false end)
+    b.InputBegan:Connect(function(i)
+        local t = i.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            s.down = true
+            if t == Enum.UserInputType.Touch then s.hov = true end
+        end
+    end)
+    b.InputEnded:Connect(function(i)
+        local t = i.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            s.down = false
+            if t == Enum.UserInputType.Touch then s.hov = false end
+        end
+    end)
+    function s.click(fn) b.Activated:Connect(fn) end
+    function s.over() return s.hov and b.Visible end
+    return s
+end
+
+-- позиция указателя в экранных координатах
+local function Ptr(i)
+    local p
+    if i and i.UserInputType == Enum.UserInputType.Touch then
+        p = Vector2.new(i.Position.X, i.Position.Y) + (GuiService:GetGuiInset())
+    else
+        p = UIS:GetMouseLocation()
+    end
+    return p          -- экранные координаты (как AbsolutePosition)
+end
+local function InputEnded(i)
+    if i.UserInputType == Enum.UserInputType.Touch then
+        return i.UserInputState == Enum.UserInputState.End or i.UserInputState == Enum.UserInputState.Cancel
+    end
+    return not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+end
+local function Dragger(obj, onBegin, onMove, onEnd)
+    obj.InputBegan:Connect(function(i)
+        local t = i.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            Drags[#Drags + 1] = { inp = i, move = onMove, fin = onEnd }
+            local p = Ptr(i)
+            if onBegin then onBegin(p) end
+            if onMove then onMove(p) end
+        end
+    end)
+end
+-- перетаскивание окна за пустое место
+local function DragWindow(obj, holder)
+    local sp, so
+    obj.Active = true
+    Dragger(obj, function(p) sp = p; so = holder.Position end, function(p)
+        if not sp then return end
+        local d = p - sp
+        holder.Position = UDim2.new(so.X.Scale, so.X.Offset + d.X, so.Y.Scale, so.Y.Offset + d.Y)
+    end, function() sp = nil end)
+end
+
+-- подсказка при наведении: fn() -> текст, style = "loader" | "menu"
+local function Tip(s, fn, style, delay)
+    Tips[#Tips + 1] = { s = s, fn = fn, style = style or "menu", delay = delay or 0.4 }
+end
+
+-- ============================================================ telegram / toast
+local ToastText, ToastT = "", 0
+local function Toast(text) ToastText = text; ToastT = 2.6 end
+
+local function OpenTelegram()
+    local copied = false
+    pcall(function()
+        if setclipboard then setclipboard(TG_URL); copied = true
+        elseif toclipboard then toclipboard(TG_URL); copied = true end
+    end)
+    pcall(function() GuiService:OpenBrowserWindow(TG_URL) end)
+    if copied then
+        Toast(TR("Ссылка скопирована: t.me/umbrellafan", "Link copied: t.me/umbrellafan"))
+    else
+        Toast("t.me/umbrellafan")
+    end
+end
+
+local UF = {}   -- мосты между секциями (лоадер <-> меню)
+-- ============================================================ icons (vector, 16x16 grid)
+local IconDefs = {}
+
+local function Icon(parent, name, cx, cy, size, c1, c2)
+    local holder = Frame(parent, cx, cy, 0, 0, nil)
+    local root = Frame(holder, 0, 0, 16, 16, nil)
+    root.AnchorPoint = Vector2.new(0.5, 0.5)
+    local sc = Instance.new("UIScale"); sc.Scale = (size or 16) / 16; sc.Parent = root
+    local parts = {}
+    local function reg(f, mode, role) parts[#parts + 1] = { f = f, mode = mode, role = role or 1 } return f end
+    local B = {}
+    function B.line(x1, y1, x2, y2, th, role) return reg(Line(root, x1, y1, x2, y2, th or 1.5, WHITE, true), "bg", role) end
+    function B.circ(x, y, r, role) return reg(Circ(root, x, y, r, WHITE), "bg", role) end
+    function B.rect(x, y, w, h, r, role) return reg(Frame(root, x, y, w, h, WHITE, r), "bg", role) end
+    function B.ring(x, y, r, th, role)
+        local f = Frame(root, x - r, y - r, r * 2, r * 2, nil, CIRC)
+        reg(Stroke(f, WHITE, th), "stroke", role); return f
+    end
+    function B.rrect(x, y, w, h, r, th, role)
+        local f = Frame(root, x, y, w, h, nil, r)
+        reg(Stroke(f, WHITE, th), "stroke", role); return f
+    end
+    function B.stad(x, y, w, h, th, role)
+        local f = Frame(root, x, y, w, h, nil, CIRC)
+        reg(Stroke(f, WHITE, th), "stroke", role); return f
+    end
+    function B.text(txt, sz, weight, role)
+        local l = Lab(root, txt, sz, 8, 8, WHITE, weight or "B", 0.5, 16)
+        reg(l, "text", role); return l
+    end
+    function B.root() return root end
+    function B.reg(f, role) return reg(f, "bg", role) end
+    local def = IconDefs[name]
+    if def then def(B) end
+    local obj = { holder = holder, root = root, scale = sc }
+    function obj.set(a, b)
+        for i = 1, #parts do
+            local p = parts[i]
+            local c = (p.role == 2 and b) or a
+            if c then
+                if p.mode == "stroke" then if p.f.Color ~= c then p.f.Color = c end
+                elseif p.mode == "text" then if p.f.TextColor3 ~= c then p.f.TextColor3 = c end
+                else if p.f.BackgroundColor3 ~= c then p.f.BackgroundColor3 = c end end
+            end
+        end
+    end
+    obj.set(c1 or WHITE, c2)
+    return obj
+end
+
+local function Star(B, cx, cy, r)
+    local n, th = 5, max(1.0, r * 0.26)
+    for i = 0, 3 do
+        local a0 = -pi / 2 + i * pi / 2
+        local a1, am = a0 + pi / 2, a0 + pi / 4
+        local p0x, p0y = cx + cos(a0) * r, cy + sin(a0) * r
+        local p1x, p1y = cx + cos(a1) * r, cy + sin(a1) * r
+        local qx, qy = cx + cos(am) * r * 0.10, cy + sin(am) * r * 0.10
+        for k = 0, n - 1 do
+            local t = (k + 0.5) / n
+            local u = 1 - t
+            B.line(cx, cy, u * u * p0x + 2 * u * t * qx + t * t * p1x, u * u * p0y + 2 * u * t * qy + t * t * p1y, th)
+        end
+    end
+end
+
+-- меню
+IconDefs.world = function(B)
+    B.ring(8, 8, 6.2, 1.4); B.stad(5.6, 1.8, 4.8, 12.4, 1.2); B.line(2, 8, 14, 8, 1.2)
+    B.line(3.2, 5, 12.8, 5, 1); B.line(3.2, 11, 12.8, 11, 1)
+end
+IconDefs.heroes = function(B)
+    B.circ(5.5, 5, 2.3); B.rect(2, 8.5, 7, 4.8, 3); B.circ(11.4, 5.8, 2); B.rect(9, 9, 5.6, 4.2, 2.5)
+end
+IconDefs.image = function(B)
+    B.rrect(1.5, 2.5, 13, 11, 2.5, 1.3); B.circ(5.2, 6.2, 1.5)
+    B.line(2.5, 12.2, 6.5, 8.5, 1.4); B.line(6.5, 8.5, 9.5, 11, 1.4)
+    B.line(8, 9.8, 11, 7.2, 1.4); B.line(11, 7.2, 13.5, 10, 1.4)
+end
+IconDefs.bolt = function(B)
+    B.line(9.5, 1.5, 4, 9, 1.6); B.line(4, 9, 8, 9, 1.6); B.line(8, 9, 6.5, 14.5, 1.6)
+    B.line(6.5, 14.5, 12, 6.5, 1.6); B.line(12, 6.5, 8, 6.5, 1.6); B.line(8, 6.5, 9.5, 1.5, 1.6)
+end
+IconDefs.sparkles = function(B)
+    Star(B, 6.1, 9.1, 7.2); Star(B, 13.4, 3.1, 3.5); Star(B, 13.9, 13.3, 2.7)
+end
+IconDefs.tools = function(B)
+    B.line(3, 13, 10, 6, 2.2); B.ring(11.6, 4.4, 3, 1.6); B.line(13.2, 13.2, 7, 7, 1.6)
+end
+IconDefs.code = function(B)
+    B.line(5.5, 4, 1.8, 8, 1.5); B.line(1.8, 8, 5.5, 12, 1.5)
+    B.line(10.5, 4, 14.2, 8, 1.5); B.line(14.2, 8, 10.5, 12, 1.5); B.line(9, 3, 7, 13, 1.4)
+end
+IconDefs.cloud = function(B)
+    B.rect(1.5, 7.5, 13, 5.5, 2.75); B.circ(5.6, 7.6, 3.2); B.circ(9.6, 6.2, 4)
+end
+IconDefs.crosshair = function(B)
+    B.ring(8, 8, 4.8, 1.4); B.line(8, 1, 8, 4.2, 1.4); B.line(8, 11.8, 8, 15, 1.4)
+    B.line(1, 8, 4.2, 8, 1.4); B.line(11.8, 8, 15, 8, 1.4)
+end
+IconDefs.eye = function(B) B.stad(1, 4, 14, 8, 1.3); B.circ(8, 8, 2.2) end
+IconDefs.shapes = function(B)
+    B.circ(4.6, 4.6, 3); B.rect(9, 2, 5.5, 5.5, 1)
+    B.line(2, 14, 5.5, 8.5, 1.5); B.line(5.5, 8.5, 9, 14, 1.5); B.line(9, 14, 2, 14, 1.5)
+    B.rect(10, 9.5, 4.5, 4.5, 1)
+end
+IconDefs.keyboard = function(B)
+    B.rrect(1, 3.5, 14, 9, 2, 1.3)
+    for i = 0, 3 do B.rect(3.2 + i * 2.6, 5.6, 1.6, 1.6, 0.4) end
+    B.rect(4.5, 9, 7, 1.6, 0.6)
+end
+IconDefs.language = function(B) B.rrect(1.2, 3, 13.6, 10, 3, 1.3); B.text("Aa", 9, "B") end
+IconDefs.clock = function(B) B.ring(8, 8, 6.4, 1.4); B.line(8, 4.2, 8, 8, 1.4); B.line(8, 8, 10.8, 9.6, 1.4) end
+IconDefs.droplet = function(B)
+    B.circ(8, 10, 4.2)
+    local d = B.rect(5.3, 2.7, 5.4, 5.4, 1); d.Rotation = 45
+end
+IconDefs.expand = function(B)
+    local t = 1.6
+    B.line(2, 6, 2, 2, t); B.line(2, 2, 6, 2, t); B.line(10, 2, 14, 2, t); B.line(14, 2, 14, 6, t)
+    B.line(2, 10, 2, 14, t); B.line(2, 14, 6, 14, t); B.line(10, 14, 14, 14, t); B.line(14, 14, 14, 10, t)
+end
+IconDefs.check = function(B) B.line(2.5, 8.5, 6.2, 12.2, 1.8); B.line(6.2, 12.2, 13.5, 4, 1.8) end
+IconDefs.xmark = function(B) B.line(3.5, 3.5, 12.5, 12.5, 1.8); B.line(3.5, 12.5, 12.5, 3.5, 1.8) end
+IconDefs.plus = function(B) B.line(8, 3, 8, 13, 1.6); B.line(3, 8, 13, 8, 1.6) end
+IconDefs.search = function(B) B.ring(7, 7, 4.6, 1.5); B.line(10.6, 10.6, 14, 14, 1.7) end
+IconDefs.gear = function(B)
+    B.ring(8, 8, 3.7, 2.3)
+    for i = 0, 7 do
+        local a = i * pi / 4
+        local f = B.rect(8 + cos(a) * 5.6 - 1.3, 8 + sin(a) * 5.6 - 1.7, 2.6, 3.4, 0.6)
+        f.Rotation = math.deg(a) + 90
+    end
+end
+IconDefs.folder = function(B)
+    B.rect(1, 4.5, 14, 9.5, 2); B.rect(1, 2.2, 6, 4, 1.5)
+    B.ring(8, 9.4, 2.2, 1.3, 2)
+end
+-- лоадер
+IconDefs.wmin = function(B) B.line(3, 8, 13, 8, 1.3) end
+IconDefs.wclose = function(B) B.line(3.4, 3.4, 12.6, 12.6, 1.3); B.line(3.4, 12.6, 12.6, 3.4, 1.3) end
+IconDefs.key = function(B)
+    B.ring(4.8, 11, 3.2, 1.4); B.line(7.2, 8.6, 13.8, 2, 1.4)
+    B.line(11.4, 4.4, 13.2, 6.2, 1.4); B.line(9.6, 6.2, 11, 7.6, 1.4)
+end
+IconDefs.slash = function(B) B.line(2, 14, 14, 2, 1.4) end
+IconDefs.arrowur = function(B)
+    B.line(3, 13, 13, 3, 1.4); B.line(5.5, 3, 13, 3, 1.4); B.line(13, 3, 13, 10.5, 1.4)
+end
+IconDefs.signal = function(B)
+    for i = 0, 2 do local h = 3 + i * 2.5; B.rect(4 + i * 3.2, 12 - h, 2, h, 0.5) end
+end
+IconDefs.help = function(B) B.circ(8, 8, 6); B.text("?", 10, "SB", 2) end
+IconDefs.promo = function(B)
+    B.rect(2, 2, 12, 12, 2.5); B.line(2, 8, 14, 8, 1.4, 2); B.line(8, 2, 8, 14, 1.4, 2)
+end
+IconDefs.snow = function(B)
+    for i = 0, 5 do
+        local a = -pi / 2 + i * pi / 3
+        local dx, dy = cos(a), sin(a)
+        B.line(8, 8, 8 + dx * 6.5, 8 + dy * 6.5, 1.4)
+        local mx, my = 8 + dx * 4, 8 + dy * 4
+        for _, k in ipairs({ -1, 1 }) do
+            local b = a + k * 0.75
+            B.line(mx, my, mx + cos(b) * 2.3, my + sin(b) * 2.3, 1.4)
+        end
+    end
+end
+IconDefs.sliders = function(B)
+    B.line(1, 5, 15, 5, 1.4); B.line(1, 11, 15, 11, 1.4)
+    B.rect(9, 2.5, 2.6, 5, 0.8); B.rect(4.4, 8.5, 2.6, 5, 0.8)
+end
+IconDefs.external = function(B)
+    B.line(8, 2, 2, 2, 1.4); B.line(2, 2, 2, 14, 1.4); B.line(2, 14, 14, 14, 1.4); B.line(14, 14, 14, 8, 1.4)
+    B.line(7, 9, 14, 2, 1.4); B.line(9, 2, 14, 2, 1.4); B.line(14, 2, 14, 7, 1.4)
+end
+IconDefs.play = function(B)
+    -- треугольник из 6 вертикальных полос
+    for i = 0, 5 do
+        local x = 4 + i * 1.5
+        local h = 11 * (1 - i / 6.4)
+        B.rect(x, 8 - h / 2, 1.7, h, 0)
+    end
+end
+IconDefs.send = function(B)
+    B.line(14, 2, 7, 9, 1.5); B.line(14, 2, 9.5, 14, 1.5); B.line(9.5, 14, 7, 9, 1.5)
+    B.line(7, 9, 2, 6.5, 1.5); B.line(2, 6.5, 14, 2, 1.5)
+end
+IconDefs.chev = function(B) B.line(3, 5.5, 8, 10.5, 1.7); B.line(8, 10.5, 13, 5.5, 1.7) end
+
+-- полукруг для "circle-half-stroke": переопределяем нормальной реализацией
+IconDefs.halfcircle = function(B)
+    B.ring(8, 8, 6.2, 1.4)
+    local cg = Instance.new("CanvasGroup")
+    cg.BackgroundTransparency = 1; cg.BorderSizePixel = 0
+    cg.Position = UDim2.fromOffset(1.8, 1.8); cg.Size = UDim2.fromOffset(6.2, 12.4)
+    cg.Parent = B.root()
+    local c = Circ(cg, 6.2, 6.2, 6.2, WHITE)
+    B.reg(c)
+end
+
+-- ============================================================ umbrella logo
+-- R - радиус внешних углов, colFn() -> тёмный, светлый, контур
+local function MakeLogo(parent, cx, cy, R, colFn)
+    local small = R < 13
+    local S = R * 2 + 6
+    local cg = Instance.new("CanvasGroup")
+    cg.BackgroundTransparency = 1; cg.BorderSizePixel = 0
+    cg.AnchorPoint = Vector2.new(0.5, 0.5)
+    cg.Position = UDim2.fromOffset(cx, cy)
+    cg.Size = UDim2.fromOffset(S, S)
+    cg.Parent = parent
+    local sc = Instance.new("UIScale"); sc.Parent = cg
+    local c = S / 2
+    local dark, light, outl = {}, {}, {}
+    local n = small and 5 or 7
+    local function curve(i, t)
+        local a0 = -pi / 2 - pi / 8 + i * pi / 4
+        local a1, am = a0 + pi / 4, a0 + pi / 8
+        local p0x, p0y = c + cos(a0) * R, c + sin(a0) * R
+        local p1x, p1y = c + cos(a1) * R, c + sin(a1) * R
+        local qx, qy = c + cos(am) * R * 0.766, c + sin(am) * R * 0.766
+        local u = 1 - t
+        return u * u * p0x + 2 * u * t * qx + t * t * p1x, u * u * p0y + 2 * u * t * qy + t * t * p1y
+    end
+    local th = (2 * pi * R / 8 / n) * 1.35 + 0.4
+    for pass = 0, 1 do
+        for i = pass, 7, 2 do
+            for k = 0, n - 1 do
+                local x, y = curve(i, (k + 0.5) / n)
+                local f = Line(cg, c, c, x, y, th, WHITE, false)
+                if pass == 0 then dark[#dark + 1] = f else light[#light + 1] = f end
+            end
+        end
+    end
+    for i = 0, 7 do
+        local x, y = curve(i, 0)
+        outl[#outl + 1] = Line(cg, c, c, x, y, 1, WHITE, false)
+        if not small then
+            local px, py = x, y
+            for k = 1, 4 do
+                local qx, qy = curve(i, k / 4)
+                outl[#outl + 1] = Line(cg, px, py, qx, qy, 1, WHITE, false)
+                px, py = qx, qy
+            end
+        end
+    end
+    for _, f in ipairs(outl) do f.BackgroundTransparency = 0.25 end
+    Stat(function()
+        local d, l, o = colFn()
+        for _, f in ipairs(dark) do f.BackgroundColor3 = d end
+        for _, f in ipairs(light) do f.BackgroundColor3 = l end
+        for _, f in ipairs(outl) do f.BackgroundColor3 = o end
+    end)
+    return { group = cg, scale = sc }
+end
+
+local function MenuLogoCols() return P.accent, P.logoLight, Shade(P.accent, -0.62) end
+local function LoaderLogoCols()
+    return Color3.fromRGB(35, 139, 28), Color3.fromRGB(209, 255, 205), Color3.fromRGB(7, 36, 10)
+end
+
+-- ============================================================ telegram button icon
+local function TGIcon(parent, cx, cy, r)
+    local c = Circ(parent, cx, cy, r, Color3.fromRGB(42, 171, 238))
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new(Color3.fromRGB(55, 174, 226), Color3.fromRGB(30, 150, 200))
+    g.Rotation = 90
+    g.Parent = c
+    local ic = Icon(parent, "send", cx - r * 0.06, cy + r * 0.04, r * 1.25, WHITE)
+    return c, ic
+end
+
+-- ============================================================ MM2 game icon (кинжал на тёмной плитке)
+local function GameIconMM2(parent, cx, cy, r)
+    local cg = Instance.new("CanvasGroup")
+    cg.BackgroundColor3 = Color3.fromRGB(43, 22, 28); cg.BorderSizePixel = 0
+    cg.Position = UDim2.fromOffset(cx - r, cy - r); cg.Size = UDim2.fromOffset(r * 2, r * 2)
+    Corner(cg, r * 0.28)
+    cg.Parent = parent
+    local o = r
+    local function L(x1, y1, x2, y2, th, col)
+        return Line(cg, o + x1 * r, o + y1 * r, o + x2 * r, o + y2 * r, th * r, col, false)
+    end
+    local red, steel = Color3.fromRGB(216, 52, 58), Color3.fromRGB(232, 234, 240)
+    L(-0.1, 0.1, 0.62, -0.62, 0.30, steel)      -- клинок
+    L(0.62, -0.62, 0.74, -0.74, 0.18, steel)
+    L(-0.30, -0.10, 0.10, 0.30, 0.17, red)      -- гарда
+    L(-0.14, 0.14, -0.62, 0.62, 0.22, red)      -- рукоять
+    Circ(cg, o - 0.66 * r, o + 0.66 * r, 0.13 * r, Color3.fromRGB(150, 30, 36))
+    return cg
+end
+-- ============================================================ layers
+local function Layer()
+    local f = Instance.new("Frame")
+    f.BackgroundTransparency = 1; f.BorderSizePixel = 0; f.Size = UDim2.fromScale(1, 1)
+    f.Parent = Gui
+    return f
+end
+local LayerBack, LayerLoader, LayerMenu, LayerPop, LayerTop = Layer(), Layer(), Layer(), Layer(), Layer()
+
+-- ============================================================ key (обфусцирован: хранится только хэш)
+local KeyOK, SaveKey, LoadKey, ForgetKey, Trim
+do
+local KH = { 1320766901, 1468100962 }
+local KMASK = 523124044
+local function KHash(s, mul, add, mod, seed)
+    local v = seed
+    for i = 1, #s do v = (v * mul + s:byte(i) + add + (i - 1)) % mod end
+    return v
+end
+function KeyOK(s)
+    if type(s) ~= "string" or #s ~= 15 then return false end
+    return KHash(s, 131, 7, 2147483629, 5381) == bit32.bxor(KH[1], KMASK)
+       and KHash(s, 257, 13, 2147483587, 977) == bit32.bxor(KH[2], KMASK)
+end
+local KEYFILE = "UmbrellaFan/key.dat"
+local function Enc(s)
+    local o = {}
+    for i = 1, #s do o[i] = string.format("%02x", bit32.bxor(s:byte(i), (i * 37 + 11) % 256)) end
+    return table.concat(o)
+end
+local function Dec(h)
+    local o, n = {}, 0
+    for i = 1, #h - 1, 2 do
+        local b = tonumber(h:sub(i, i + 1), 16)
+        if not b then return "" end
+        n = n + 1
+        o[n] = string.char(bit32.bxor(b, (n * 37 + 11) % 256))
+    end
+    return table.concat(o)
+end
+function SaveKey(s)
+    ENV.__UF_KEY = Enc(s)
+    pcall(function()
+        if makefolder and isfolder and not isfolder("UmbrellaFan") then makefolder("UmbrellaFan") end
+        if writefile then writefile(KEYFILE, Enc(s)) end
+    end)
+end
+function LoadKey()
+    local raw
+    pcall(function() if isfile and readfile and isfile(KEYFILE) then raw = readfile(KEYFILE) end end)
+    raw = raw or ENV.__UF_KEY
+    if type(raw) == "string" and #raw > 0 then
+        local k = Dec(raw)
+        if KeyOK(k) then return k end
+    end
+    return nil
+end
+function ForgetKey()
+    ENV.__UF_KEY = nil
+    pcall(function() if delfile and isfile and isfile(KEYFILE) then delfile(KEYFILE) end end)
+end
+function Trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+
+end
+
+-- ============================================================ loader palette
+local function HX(n) return Color3.fromRGB(floor(n / 65536) % 256, floor(n / 256) % 256, n % 256) end
+local LC = {
+    BG = HX(0x101014), SIDE = HX(0x141419), PANEL = HX(0x141419), FIELD = HX(0x1d1d22), FIELD_H = HX(0x232328),
+    GROUP = HX(0x18181d), BORDER = HX(0x29292e), BORDER_H = HX(0x35353b), POPUP = HX(0x17171c), ITEM_H = HX(0x27272d),
+    TIP = HX(0x1d1d22), ACCENT = HX(0x238b1c), ACCENT_H = HX(0x2da024), ACCENT_D = HX(0x1b7016), ACCENT_BG = HX(0x172c1a),
+    ERR = HX(0xe05252), WHITE = HX(0xf2f3f5), TEXT = HX(0xe4e5e8), GRAY = HX(0x80828b), GRAY2 = HX(0xa3a5ab), ICON = HX(0x8d9097),
+}
+local function HV(h)
+    local v = LAnim(h, h.over() and 1 or 0)
+    if h.down then return 1.25 end
+    return v
+end
+
+-- ============================================================ loader frame
+local Lscr, Ltime = "splash", 0
+local LShowT, LShowV = 1, 0
+local LMinimized, LClosing = false, false
+local LSIZE = { splash = { 262, 237 }, login = { 480, 404 }, main = { 624, 522 } }
+local sessionKey, autoLaunch = nil, false
+local launchT = -1
+local LBaseScale = 1
+
+local LG = {}
+LG.all    = Group()
+LG.splash = Group(function() return Lscr == "splash" and LShowV > 0.01 end)
+LG.login  = Group(function() return Lscr == "login" and LShowV > 0.01 end)
+LG.main   = Group(function() return Lscr == "main" and LShowV > 0.01 end)
+
+local LHolder = Frame(LayerLoader, 0, 0, 0, 0, nil)
+LHolder.Position = UDim2.fromScale(0.5, 0.5)
+local LRoot = Instance.new("CanvasGroup")
+LRoot.AnchorPoint = Vector2.new(0.5, 0.5)
+LRoot.Position = UDim2.fromOffset(0, 0)
+LRoot.Size = UDim2.fromOffset(262, 237)
+LRoot.BackgroundColor3 = LC.BG
+LRoot.BorderSizePixel = 0
+LRoot.Active = true
+Corner(LRoot, 10)
+Stroke(LRoot, LC.BORDER, 1)
+LRoot.Parent = LHolder
+local LS = Instance.new("UIScale"); LS.Parent = LRoot
+DragWindow(LRoot, LHolder)
+
+local function CalcLScale()
+    local v = VP()
+    if IS_MOBILE then
+        return clamp(min(v.Y * 0.90 / 522, v.X * 0.94 / 624, 1.25), 0.45, 1.25)
+    end
+    local s = clamp(floor(v.Y / 1080 * 4 + 0.5) / 4, 0.75, 2)
+    return max(min(s, v.Y * 0.92 / 522, v.X * 0.94 / 624), 0.5)
+end
+
+local function ScreenFrame()
+    local f = Frame(LRoot, 0, 0, 0, 0, nil)
+    f.Size = UDim2.fromScale(1, 1)
+    return f
+end
+local spF, lgF, mnF = ScreenFrame(), ScreenFrame(), ScreenFrame()
+local popLayer = ScreenFrame()
+local fadeF = Frame(LRoot, 0, 0, 0, 0, LC.BG, 10); fadeF.Size = UDim2.fromScale(1, 1); fadeF.ZIndex = 50
+
+-- ============================================================ loader popups
+local LPop = { cur = nil, frames = {} }
+local blocker = Instance.new("TextButton")
+blocker.Text = ""; blocker.AutoButtonColor = false; blocker.BackgroundTransparency = 1
+blocker.Size = UDim2.fromScale(1, 1); blocker.Visible = false; blocker.Parent = popLayer
+function LPop.close()
+    LPop.cur = nil; blocker.Visible = false
+    for _, f in pairs(LPop.frames) do f.Visible = false end
+end
+function LPop.toggle(name)
+    if LPop.cur == name then LPop.close(); return end
+    LPop.close()
+    LPop.cur = name; blocker.Visible = true; LPop.frames[name].Visible = true
+end
+blocker.Activated:Connect(LPop.close)
+local function PopFrame(name, x, y, w, h, ax, ay)
+    local f = Frame(popLayer, x, y, w, h, LC.POPUP, 8)
+    f.AnchorPoint = Vector2.new(ax or 0, ay or 0)
+    Stroke(f, LC.BORDER, 1)
+    f.Visible = false
+    LPop.frames[name] = f
+    return f
+end
+
+local function SetScreen(s)
+    Lscr = s; Ltime = 0
+    spF.Visible = s == "splash"; lgF.Visible = s == "login"; mnF.Visible = s == "main"
+    LRoot.Size = UDim2.fromOffset(LSIZE[s][1], LSIZE[s][2])
+    LPop.close()
+end
+
+local function LMinimize() LMinimized = true; LShowT = 0 end
+local function LClose() LClosing = true; LShowT = 0 end
+
+-- кнопки окна (свернуть / закрыть)
+local function WinBtns(parent, g, minX, closeX, cy, showMin)
+    if showMin then
+        local h = Hit(parent, minX - 10, cy - 10, 20, 20)
+        local ic = Icon(parent, "wmin", minX, cy, 16)
+        h.click(LMinimize)
+        Dyn(g, function() ic.set(Mix(LC.ICON, LC.WHITE, HV(h))) end)
+    end
+    local h = Hit(parent, closeX - 10, cy - 10, 20, 20)
+    local ic = Icon(parent, "wclose", closeX, cy, 16)
+    h.click(LClose)
+    Dyn(g, function() ic.set(Mix(LC.ICON, LC.WHITE, HV(h))) end)
+end
+
+-- акцентная кнопка
+local function RedBtn(parent, g, x, y, w, h, r, disabledFn)
+    local f = Frame(parent, x, y, w, h, LC.ACCENT, r)
+    local hit = Hit(parent, x, y, w, h)
+    Dyn(g, function()
+        local dis = disabledFn and disabledFn()
+        local hv = dis and 0 or HV(hit)
+        local c = Mix(LC.ACCENT, LC.ACCENT_H, min(hv, 1))
+        if hv > 1 then c = LC.ACCENT_D end
+        f.BackgroundColor3 = c
+    end)
+    return hit, f
+end
+
+-- ============================================================ SPLASH
+do
+    WinBtns(spF, LG.splash, 0, 236, 26, false)
+    local glow = {}
+    for k = 0, 3 do glow[k] = Circ(spF, 131, 92, 58 - k * 9, LC.ACCENT) end
+    local logo = MakeLogo(spF, 131, 92, 21, LoaderLogoCols)
+    local t1 = Lab(spF, "UmbrellaFan", 17, 131, 146, LC.WHITE, "SB", 0.5, 260)
+    local t2 = Lab(spF, function() return TR("инициализация ядра", "initializing core") end, 14, 131, 188, HX(0x8a8c93), "R", 0.5, 260)
+    Dyn(LG.splash, function()
+        local inn = Sat(Ltime / 0.7)
+        local ease = 1 - (1 - inn) ^ 3
+        local pulse = 0.75 + 0.25 * sin(NOW * 3)
+        for k = 0, 3 do
+            local a = (0.025 + k * 0.012) * ease * (0.7 + 0.3 * sin(NOW * 2))
+            glow[k].BackgroundTransparency = 1 - a
+        end
+        logo.group.GroupTransparency = 1 - ease
+        logo.scale.Scale = 0.82 + 0.18 * ease
+        t1.TextTransparency = 1 - ease
+        t2.TextTransparency = 1 - pulse
+        if Ltime > 2.4 then SetScreen("login") end
+    end)
+end
+
+-- ============================================================ LOGIN (ключ вместо логина/пароля)
+local keyBox, tryLogin
+do
+    local g = LG.login
+    local lerr = 0
+    local show = false
+    WinBtns(lgF, g, 428, 452, 30, true)
+    local logo = MakeLogo(lgF, 240, 42, 15.5, LoaderLogoCols)
+    Lab(lgF, function() return TR("Авторизация", "Authorization") end, 20, 240, 84, LC.WHITE, "SB", 0.5, 400)
+    Lab(lgF, function() return TR("Лицензионный ключ", "License key") end, 14, 32, 118, LC.TEXT, "M", 0, 300)
+
+    local fy = 136
+    local fieldBg = Frame(lgF, 18, fy, 444, 36, LC.FIELD, 8)
+    local fstroke = Stroke(fieldBg, LC.BORDER_H, 1, 1)
+    local fhit = Hit(lgF, 18, fy, 444, 36)
+    local keyIc = Icon(lgF, "key", 40, fy + 18, 16, LC.ICON)
+    local box = Instance.new("TextBox")
+    keyBox = box
+    box.BackgroundTransparency = 1; box.BorderSizePixel = 0
+    box.Position = UDim2.fromOffset(61, fy); box.Size = UDim2.fromOffset(364, 36)
+    box.FontFace = FONT.R; box.TextSize = 14.5; box.TextColor3 = LC.TEXT
+    box.PlaceholderColor3 = HX(0x6c6f77); box.ClearTextOnFocus = false
+    box.TextXAlignment = Enum.TextXAlignment.Left; box.Text = ""
+    box.ClipsDescendants = true
+    Stat(function() box.PlaceholderText = TR("Введите ключ", "Enter your key") end)
+    box.Parent = lgF
+    local mask = Lab(lgF, "", 14.5, 61, fy + 18, LC.TEXT, "R", 0, 364)
+    local caret = Frame(lgF, 61, fy + 10, 1, 16, LC.TEXT)
+    caret.Visible = false
+    fhit.click(function() box:CaptureFocus() end)
+
+    local eye = Hit(lgF, 428, fy + 6, 24, 24)
+    local eyeIc = Icon(lgF, "eye", 439, fy + 18, 16, LC.ICON)
+    local eyeSl = Icon(lgF, "slash", 439, fy + 18, 16, LC.ICON)
+    eye.click(function() show = not show end)
+
+    function tryLogin(auto)
+        local s = Trim(box.Text)
+        if KeyOK(s) then
+            SaveKey(s); sessionKey = s
+            autoLaunch = auto == true
+            SetScreen("main")
+        else
+            lerr = 1.5
+            Toast(TR("Неверный ключ", "Invalid key"))
+        end
+    end
+    box.FocusLost:Connect(function(enter) if enter then tryLogin(false) end end)
+
+    Dyn(g, function()
+        local focused = box:IsFocused()
+        local h = LAnim(fieldBg, (fhit.over() or focused) and 1 or 0)
+        fieldBg.BackgroundColor3 = Mix(LC.FIELD, LC.FIELD_H, h)
+        lerr = max(0, lerr - DT)
+        if lerr > 0 then
+            fstroke.Color = LC.ERR; fstroke.Thickness = 1.2; fstroke.Transparency = 1 - min(1, lerr * 2)
+        elseif focused then
+            fstroke.Color = LC.BORDER_H; fstroke.Thickness = 1; fstroke.Transparency = 0
+        else
+            fstroke.Transparency = 1
+        end
+        keyIc.set(Mix(LC.ICON, HX(0xb8bac0), h))
+        if #box.Text > 64 then box.Text = box.Text:sub(1, 64) end
+        local txt = box.Text
+        if not show and #txt > 0 then
+            mask.Text = string.rep("•", utf8.len(txt) or #txt)
+            box.TextTransparency = 1
+        else
+            mask.Text = ""; box.TextTransparency = 0
+        end
+        caret.Visible = (not show) and focused and #txt > 0 and (floor(NOW * 1.9) % 2 == 0)
+        caret.Position = UDim2.fromOffset(61 + mask.TextBounds.X + 1, fy + 10)
+        local ev = HV(eye)
+        eyeIc.set(Mix(LC.ICON, LC.WHITE, ev)); eyeSl.set(Mix(LC.ICON, LC.WHITE, ev))
+        eyeSl.holder.Visible = show
+    end)
+
+    -- продолжить
+    local cont = RedBtn(lgF, g, 18, 272, 444, 40, 8)
+    Lab(lgF, function() return TR("Продолжить", "Continue") end, 14, 240, 292, LC.WHITE, "R", 0.5, 300)
+    cont.click(function() tryLogin(false) end)
+
+    -- Telegram (вместо "Забыли пароль")
+    local tgC = TGIcon(lgF, 27, 341, 9)
+    local tgT = Lab(lgF, TG_HANDLE, 14, 42, 341, LC.GRAY, "R", 0, 200)
+    local tgH = Hit(lgF, 16, 330, 30 + TW(TG_HANDLE, 14), 22)
+    tgH.click(OpenTelegram)
+    Tip(tgH, function() return TR("Открыть Telegram-канал", "Open Telegram channel") end, "loader", 0.5)
+
+    -- быстрый вход
+    local qT = Lab(lgF, function() return TR("Быстрый вход", "Quick login") end, 14, 462, 341, LC.GRAY2, "R", 1, 200)
+    local qIc = Icon(lgF, "arrowur", 0, 341, 11, LC.GRAY2)
+    local qH = Hit(lgF, 300, 332, 162, 18)
+    qH.click(function()
+        local k = LoadKey()
+        if k then
+            sessionKey = k; autoLaunch = true; SetScreen("main")
+        else
+            lerr = 1.5
+            Toast(TR("Сохранённого ключа нет, введите ключ", "No saved key, enter your key"))
+        end
+    end)
+    Tip(qH, function() return TR("Войти по сохранённому ключу и сразу запустить", "Sign in with the saved key and launch instantly") end, "loader", 0.5)
+
+    Dyn(g, function()
+        local tv = HV(tgH)
+        tgT.TextColor3 = Mix(LC.GRAY, LC.TEXT, tv)
+        tgC.Size = UDim2.fromOffset(18 + tv * 1.5, 18 + tv * 1.5)
+        tgC.Position = UDim2.fromOffset(27 - 9 - tv * 0.75, 341 - 9 - tv * 0.75)
+        local qs = TW(qT.Text, 14)
+        local qx0 = 462 - qs - 20
+        qH.btn.Position = UDim2.fromOffset(qx0 - 6, 332); qH.btn.Size = UDim2.fromOffset(462 - qx0 + 6, 18)
+        qIc.holder.Position = UDim2.fromOffset(qx0 + 6, 341)
+        local qc = Mix(LC.GRAY2, LC.WHITE, HV(qH))
+        qT.TextColor3 = qc; qIc.set(qc)
+    end)
+
+    -- регион и язык
+    local REG = { { "Россия", "Russia" }, { "Европа", "Europe" }, { "Азия", "Asia" } }
+    local REGC = { HX(0x3fb950), HX(0x3fb950), HX(0xd7a42b) }
+    local region = 1
+    local function RegName(i) return TR(REG[i][1], REG[i][2]) end
+    local function LangName(l) return l == "ru" and "Русский" or "English" end
+
+    local rBox = Frame(lgF, 18, 360, 120, 30, nil, 8); local rStroke = Stroke(rBox, LC.BORDER, 1)
+    local rHit = Hit(lgF, 18, 360, 120, 30)
+    local rSig = Icon(lgF, "signal", 33, 375, 16, REGC[1])
+    local rTxt = Lab(lgF, function() return RegName(region) end, 14, 44, 375, HX(0xc9cacf), "R", 0, 200)
+    local rChev = Icon(lgF, "chev", 0, 375, 8, LC.GRAY2)
+    rHit.click(function() LPop.toggle("region") end)
+
+    local lBox = Frame(lgF, 150, 360, 120, 30, nil, 8); local lStroke = Stroke(lBox, LC.BORDER, 1)
+    local lHit = Hit(lgF, 150, 360, 120, 30)
+    local lFlagHolder = Frame(lgF, 0, 0, 0, 0, nil)
+    local lTxt = Lab(lgF, function() return LangName(st.lang) end, 14, 0, 375, HX(0xc9cacf), "R", 0, 200)
+    local lChev = Icon(lgF, "chev", 0, 375, 8, LC.GRAY2)
+    lHit.click(function() LPop.toggle("lang") end)
+
+    local function Flag(parent, lang, cx, cy, r)
+        local cgp = Instance.new("CanvasGroup")
+        cgp.BorderSizePixel = 0; cgp.BackgroundColor3 = WHITE
+        cgp.Position = UDim2.fromOffset(cx - r, cy - r); cgp.Size = UDim2.fromOffset(r * 2, r * 2)
+        Corner(cgp, CIRC); cgp.Parent = parent
+        if lang == "ru" then
+            cgp.BackgroundColor3 = HX(0xf4f4f4)
+            Frame(cgp, 0, r * 2 / 3, r * 2, r * 2 / 3 + 1, HX(0x2b5fd9))
+            Frame(cgp, 0, r * 4 / 3, r * 2, r * 2 / 3 + 1, HX(0xd8343a))
+        else
+            cgp.BackgroundColor3 = HX(0x23408e)
+            Line(cgp, 0, 0, r * 2, r * 2, r * 0.7, WHITE, false); Line(cgp, 0, r * 2, r * 2, 0, r * 0.7, WHITE, false)
+            Frame(cgp, 0, r * 0.78, r * 2, r * 0.44, WHITE); Frame(cgp, r * 0.78, 0, r * 0.44, r * 2, WHITE)
+            Frame(cgp, 0, r * 0.88, r * 2, r * 0.24, HX(0xd8343a)); Frame(cgp, r * 0.88, 0, r * 0.24, r * 2, HX(0xd8343a))
+        end
+        return cgp
+    end
+    local flagRu, flagEn = Flag(lgF, "ru", 0, 375, 5.5), Flag(lgF, "en", 0, 375, 5.5)
+
+    -- выпадающие списки (появляются сверху, как в ImGui)
+    local rPop = PopFrame("region", 18, 356, 150, 102, 0, 1)
+    for i = 1, 3 do
+        local y = 4 + (i - 1) * 32
+        local bg = Frame(rPop, 4, y, 142, 30, LC.ITEM_H, 6)
+        local ic = Icon(rPop, "signal", 18, y + 15, 16, REGC[i])
+        Lab(rPop, function() return RegName(i) end, 14, 30, y + 15, HX(0xd9dade), "R", 0, 110)
+        local h = Hit(rPop, 4, y, 142, 30)
+        h.click(function() region = i; rSig.set(REGC[i]); LPop.close() end)
+        Dyn(g, function()
+            local t = LAnim(h, h.over() and 1 or 0)
+            local a = (region == i) and max(t, 0.6) or t
+            bg.BackgroundTransparency = 1 - (a > 0.01 and a or 0)
+        end)
+    end
+    local lPop = PopFrame("lang", 150, 356, 150, 68, 0, 1)
+    for i, l in ipairs({ "ru", "en" }) do
+        local y = 4 + (i - 1) * 32
+        local bg = Frame(lPop, 4, y, 142, 30, LC.ITEM_H, 6)
+        Flag(lPop, l, 19, y + 15, 5.5)
+        Lab(lPop, LangName(l), 14, 34, y + 15, HX(0xd9dade), "R", 0, 110)
+        local h = Hit(lPop, 4, y, 142, 30)
+        h.click(function() st.lang = l; Ver = Ver + 1; LPop.close() end)
+        Dyn(g, function()
+            local t = LAnim(h, h.over() and 1 or 0)
+            local a = (st.lang == l) and max(t, 0.6) or t
+            bg.BackgroundTransparency = 1 - (a > 0.01 and a or 0)
+        end)
+    end
+
+    Dyn(g, function()
+        local rw = 36 + TW(rTxt.Text, 14) + 26
+        rBox.Size = UDim2.fromOffset(rw, 30); rHit.btn.Size = UDim2.fromOffset(rw, 30)
+        rStroke.Color = Mix(LC.BORDER, LC.BORDER_H, HV(rHit))
+        rChev.holder.Position = UDim2.fromOffset(18 + rw - 14, 375)
+        local x1 = 18 + rw
+        local lw = 30 + TW(lTxt.Text, 14) + 40
+        local ax = x1 + 8
+        lBox.Position = UDim2.fromOffset(ax, 360); lBox.Size = UDim2.fromOffset(lw, 30)
+        lHit.btn.Position = UDim2.fromOffset(ax, 360); lHit.btn.Size = UDim2.fromOffset(lw, 30)
+        lStroke.Color = Mix(LC.BORDER, LC.BORDER_H, HV(lHit))
+        lChev.holder.Position = UDim2.fromOffset(ax + lw - 16, 375)
+        lTxt.Position = UDim2.fromOffset(ax + 30, 375)
+        flagRu.Position = UDim2.fromOffset(ax + 15 - 5.5, 375 - 5.5); flagEn.Position = flagRu.Position
+        flagRu.Visible = st.lang == "ru"; flagEn.Visible = st.lang == "en"
+        lPop.Position = UDim2.fromOffset(ax, 356)
+    end)
+end
+
+-- ============================================================ MAIN (только MM2)
+local ChangeLog = {
+    { 0, "Core:", "Ядро:" },
+    { 1, "Initial UmbrellaFan release", "Первый релиз UmbrellaFan" },
+    { 1, "Redesigned interface with a new colour scheme", "Новый интерфейс и цветовая схема" },
+    { 1, "Performance and stability improvements", "Улучшена производительность и стабильность" },
+    { 0, "Murder Mystery 2:", "Murder Mystery 2:" },
+    { 1, "MM2 module with quick launch", "Модуль MM2 с быстрым запуском" },
+    { 1, "Mobile support: adaptive menu size", "Поддержка телефонов: адаптивный размер меню" },
+}
+local clOpen = true
+do
+    local g = LG.main
+    -- сайдбар
+    Frame(mnF, 0, 0, 56, 522, LC.SIDE)
+    MakeLogo(mnF, 28, 36, 16, LoaderLogoCols)
+    do
+        local cy = 94
+        local selBg = Frame(mnF, 11, cy - 17, 34, 34, LC.ACCENT_BG, 8)
+        GameIconMM2(mnF, 28, cy, 8)
+        Hit(mnF, 11, cy - 17, 34, 34)
+    end
+    -- аватар и шестерёнка -> меню аккаунта
+    local avF = Frame(mnF, 14, 433, 28, 28, HX(0x0d0d10), 7)
+    local avS = Stroke(avF, LC.ACCENT, 2)
+    MakeLogo(mnF, 28, 447, 9, LoaderLogoCols)
+    local avH = Hit(mnF, 14, 433, 28, 28)
+    local gearIc = Icon(mnF, "gear", 28, 484, 15, LC.ICON)
+    local gearH = Hit(mnF, 18, 474, 20, 20)
+    avH.click(function() LPop.toggle("account") end); gearH.click(function() LPop.toggle("account") end)
+    Dyn(g, function()
+        avS.Color = Mix(LC.ACCENT, LC.ACCENT_H, HV(avH))
+        gearIc.set(Mix(LC.ICON, LC.WHITE, HV(gearH)))
+    end)
+
+    local acc = PopFrame("account", 50, 494, 220, 72, 0, 1)
+    Lab(acc, function() return TR("Лицензия активна | MM2", "License active | MM2") end, 13, 14, 21, LC.GRAY2, "R", 0, 200)
+    local outBg = Frame(acc, 4, 38, 212, 30, LC.ITEM_H, 6)
+    local outH = Hit(acc, 4, 38, 212, 30)
+    local outT = Lab(acc, function() return TR("Выйти из аккаунта", "Log out") end, 14, 14, 53, HX(0xe06060), "R", 0, 190)
+    outH.click(function()
+        LPop.close(); keyBox.Text = ""; sessionKey = nil; ForgetKey(); launchT = -1
+        SetScreen("login")
+    end)
+    Dyn(g, function()
+        local t = LAnim(outH, outH.over() and 1 or 0)
+        outBg.BackgroundTransparency = 1 - (t > 0.01 and t or 0)
+        outT.TextColor3 = Mix(HX(0xe06060), HX(0xff7a7a), t)
+    end)
+
+    -- верхняя панель
+    local pIc = Icon(mnF, "promo", 83, 29, 16, HX(0xb1b3b9), LC.BG)
+    local pT = Lab(mnF, function() return TR("Промокод", "Promo code") end, 14, 98, 29, HX(0xb1b3b9), "R", 0, 200)
+    local pH = Hit(mnF, 74, 19, 100, 20)
+    local sIc = Icon(mnF, "help", 194, 29, 16, HX(0xb1b3b9), LC.BG)
+    local sT = Lab(mnF, function() return TR("Поддержка", "Support") end, 14, 209, 29, HX(0xb1b3b9), "R", 0, 200)
+    local sH = Hit(mnF, 185, 19, 100, 20)
+    pH.click(function() LPop.toggle("promo") end)
+    sH.click(OpenTelegram)
+    Tip(sH, function() return TR("Поддержка в Telegram " .. TG_HANDLE, "Telegram support " .. TG_HANDLE) end, "loader", 0.5)
+    WinBtns(mnF, g, 572, 596, 29, true)
+    Dyn(g, function()
+        local ps = TW(pT.Text, 14)
+        pH.btn.Size = UDim2.fromOffset(24 + ps + 4, 20)
+        local pc = Mix(HX(0xb1b3b9), LC.WHITE, HV(pH)); pIc.set(pc, LC.BG); pT.TextColor3 = pc
+        local sx = max(98 + ps + 16 + 11 - 4, 194)
+        local ss = TW(sT.Text, 14)
+        sIc.holder.Position = UDim2.fromOffset(sx, 29); sT.Position = UDim2.fromOffset(sx + 15, 29)
+        sH.btn.Position = UDim2.fromOffset(sx - 9, 19); sH.btn.Size = UDim2.fromOffset(24 + ss, 20)
+        local sc = Mix(HX(0xb1b3b9), LC.WHITE, HV(sH)); sIc.set(sc, LC.BG); sT.TextColor3 = sc
+    end)
+
+    -- промокод
+    local promoMsg = 0
+    local pp = PopFrame("promo", 74, 44, 280, 116)
+    Lab(pp, function() return TR("Активация промокода", "Redeem promo code") end, 14, 12, 21, LC.WHITE, "M", 0, 256)
+    Frame(pp, 12, 34, 256, 34, LC.FIELD, 8)
+    local pbox = Instance.new("TextBox")
+    pbox.BackgroundTransparency = 1; pbox.BorderSizePixel = 0
+    pbox.Position = UDim2.fromOffset(22, 34); pbox.Size = UDim2.fromOffset(236, 34)
+    pbox.FontFace = FONT.R; pbox.TextSize = 14; pbox.TextColor3 = LC.TEXT; pbox.PlaceholderText = "XXXX-XXXX-XXXX"
+    pbox.PlaceholderColor3 = HX(0x6c6f77); pbox.ClearTextOnFocus = false; pbox.TextXAlignment = Enum.TextXAlignment.Left
+    pbox.Text = ""; pbox.Parent = pp
+    pbox:GetPropertyChangedSignal("Text"):Connect(function()
+        local u = pbox.Text:upper():sub(1, 24)
+        if u ~= pbox.Text then pbox.Text = u end
+    end)
+    local actBg = Frame(pp, 12, 70, 256, 34, LC.ACCENT, 8)
+    local actH = Hit(pp, 12, 70, 256, 34)
+    Lab(pp, function() return TR("Активировать", "Activate") end, 14, 140, 87, LC.WHITE, "R", 0.5, 200)
+    local msg = Lab(pp, function() return TR("Промокод не найден", "Promo code not found") end, 13, 12, 118, HX(0xe06060), "R", 0, 256)
+    local function Activate() if #pbox.Text > 0 then promoMsg = 3 end end
+    actH.click(Activate)
+    pbox.FocusLost:Connect(function(e) if e then Activate() end end)
+    Dyn(g, function()
+        actBg.BackgroundColor3 = actH.over() and LC.ACCENT_H or LC.ACCENT
+        if LPop.cur ~= "promo" then promoMsg = 0 end
+        promoMsg = max(0, promoMsg - DT)
+        msg.TextTransparency = 1 - min(1, promoMsg)
+        pp.Size = UDim2.fromOffset(280, promoMsg > 0 and 138 or 116)
+    end)
+    pH.click(function() if LPop.cur == "promo" then promoMsg = 0; pbox:CaptureFocus() end end)
+
+    -- заголовок игры
+    GameIconMM2(mnF, 83, 74, 8)
+    Lab(mnF, "Murder Mystery 2", 20, 100, 74, LC.WHITE, "SB", 0, 300)
+    local untilDate = os.date("%d.%m.%Y 23:59", os.time() + 30 * 86400)
+    Lab(mnF, function() return TR("Подписка до ", "Subscription until ") .. untilDate end, 14, 100, 99, LC.GRAY, "R", 0, 380)
+
+    Frame(mnF, 520, 68, 84, 32, LC.GROUP, 8)
+    local tools = { "snow", "sliders", "external" }
+    local tips = {
+        function() return TR("Заморозить подписку", "Freeze subscription") end,
+        function() return TR("Настройки запуска", "Launch options") end,
+        function() return TR("Telegram-канал " .. TG_HANDLE, "Telegram channel " .. TG_HANDLE) end,
+    }
+    for i = 1, 3 do
+        local cx = 534 + (i - 1) * 28
+        local bg = Frame(mnF, cx - 12, 72, 24, 24, LC.ITEM_H, 6)
+        local ic = Icon(mnF, tools[i], cx, 84, 14, HX(0xc4c6cb))
+        local h = Hit(mnF, cx - 12, 72, 24, 24)
+        h.click(function()
+            if i == 3 then OpenTelegram() else Toast(TR("Скоро", "Coming soon")) end
+        end)
+        Tip(h, tips[i], "loader", 0.5)
+        Dyn(g, function()
+            local v = HV(h)
+            bg.BackgroundTransparency = 1 - (v > 0.01 and min(v, 1) or 0)
+            ic.set(Mix(HX(0xc4c6cb), LC.WHITE, v))
+        end)
+    end
+
+    -- список изменений
+    Frame(mnF, 76, 129, 528, 305, LC.PANEL, 10)
+    local sf = Instance.new("ScrollingFrame")
+    sf.BackgroundTransparency = 1; sf.BorderSizePixel = 0
+    sf.Position = UDim2.fromOffset(76, 131); sf.Size = UDim2.fromOffset(524, 295)
+    sf.ScrollBarThickness = 4; sf.ScrollBarImageColor3 = HX(0x2f2f35)
+    sf.ScrollingDirection = Enum.ScrollingDirection.Y; sf.CanvasSize = UDim2.fromOffset(0, 400)
+    sf.Parent = mnF
+    Lab(sf, function() return TR("Последние изменения", "Latest changes") end, 14, 14, 18, LC.GRAY2, "R", 0, 300)
+    local hH = Hit(sf, 6, 36, 512, 28)
+    local hT = Lab(sf, function() return TR("Обновление от ", "Update from ") .. os.date("%d.%m.%Y 03:00", os.time() - 2 * 86400) end, 14, 14, 50, LC.TEXT, "M", 0, 450)
+    local chev = Icon(sf, "chev", 506, 50, 12, HX(0xc4c6cb))
+    hH.click(function() clOpen = not clOpen end)
+    local body = Frame(sf, 0, 66, 600, 0, nil); body.ClipsDescendants = true
+    local items = {}
+    for i, l in ipairs(ChangeLog) do
+        local it = { type = l[1] }
+        if l[1] == 0 then
+            it.lab = Lab(body, function() return TR(l[3], l[2]) end, 14, 14, 10, LC.TEXT, "M", 0, 504)
+        else
+            it.dot = Circ(body, 24, 10, 2.2, HX(0xc9cacf))
+            it.lab = Lab(body, function() return TR(l[3], l[2]) end, 14, 38, 10, HX(0xc9cacf), "R", 0, 480)
+            it.lab.TextWrapped = true; it.lab.TextYAlignment = Enum.TextYAlignment.Top
+        end
+        items[i] = it
+    end
+    local fullH = 0
+    Stat(function()
+        local y = 0
+        for _, it in ipairs(items) do
+            if it.type == 0 then
+                it.lab.Position = UDim2.fromOffset(14, y + 10); y = y + 22
+            else
+                local n = max(1, math.ceil(TW(it.lab.Text, 14) / 470))
+                it.lab.AnchorPoint = Vector2.new(0, 0)
+                it.lab.Position = UDim2.fromOffset(38, y + 3)
+                it.lab.Size = UDim2.fromOffset(480, n * 20)
+                it.dot.Position = UDim2.fromOffset(24 - 2.2, y + 10 - 2.2)
+                y = y + n * 20
+            end
+        end
+        fullH = y
+    end)
+    Dyn(g, function()
+        local hv = HV(hH)
+        local open = LAnim("cl", clOpen and 1 or 0, 16)
+        hT.TextColor3 = Mix(LC.TEXT, WHITE, hv)
+        chev.set(Mix(HX(0xc4c6cb), WHITE, hv)); chev.root.Rotation = 180 * open
+        body.Size = UDim2.fromOffset(600, fullH * open)
+        sf.CanvasSize = UDim2.fromOffset(0, 66 + fullH * open + 10)
+    end)
+
+    -- кнопка запуска
+    local busyFn = function() return launchT >= 0 end
+    local launch = RedBtn(mnF, g, 76, 454, 528, 48, 10, busyFn)
+    launch.click(function() if launchT < 0 then launchT = 0 end end)
+    local lbl = Lab(mnF, "", 14, 0, 478, WHITE, "M", 0, 300)
+    local playIc = Icon(mnF, "play", 0, 478, 13, WHITE)
+    local dots = {}
+    for i = 1, 14 do dots[i] = Circ(mnF, 0, 0, 1.1, WHITE) end
+    Dyn(g, function()
+        if autoLaunch and Ltime > 0.5 and launchT < 0 then autoLaunch = false; launchT = 0 end
+        local label = TR("Запустить", "Launch")
+        local spin = false
+        if launchT >= 0 then
+            launchT = launchT + DT
+            if launchT < 2.5 then label = TR("Запуск...", "Launching..."); spin = true
+            elseif launchT < 4.5 then label = TR("Запущено", "Launched")
+            else launchT = -1; UF.LaunchDone() end
+        end
+        lbl.Text = label
+        local total = 18 + TW(label, 14, 1.03)
+        local x = 340 - total / 2
+        lbl.Position = UDim2.fromOffset(x + 18, 478)
+        playIc.holder.Visible = not spin
+        playIc.holder.Position = UDim2.fromOffset(x + 4.5, 478)
+        for i = 1, 14 do
+            dots[i].Visible = spin
+            if spin then
+                local a0 = NOW * 6
+                local a = a0 + (i - 1) / 13 * pi * 1.4
+                local r = 1.1 + (i / 14) * 0.5
+                dots[i].Size = UDim2.fromOffset(r * 2, r * 2)
+                dots[i].Position = UDim2.fromOffset(x + 5 + cos(a) * 6 - r, 478 + sin(a) * 6 - r)
+                dots[i].BackgroundTransparency = 1 - (0.25 + 0.75 * i / 14)
+            end
+        end
+    end)
+end
+
+-- ============================================================ свёрнутая плашка + показ/скрытие лоадера
+local LMini = Frame(LayerTop, 0, 0, 150, 30, LC.BG, 15)
+LMini.AnchorPoint = Vector2.new(0.5, 0); LMini.Position = UDim2.new(0.5, 0, 0, 14); LMini.Visible = false
+Stroke(LMini, LC.BORDER, 1)
+MakeLogo(LMini, 18, 15, 8, LoaderLogoCols)
+Lab(LMini, "UmbrellaFan", 13, 34, 15, LC.WHITE, "SB", 0, 110)
+local miniH = Hit(LMini, 0, 0, 150, 30)
+miniH.click(function() LMinimized = false; LShowT = 1 end)
+
+Dyn(LG.all, function()
+    LShowV = LAnim("lshow", LShowT, 12)
+    LRoot.GroupTransparency = 1 - LShowV
+    LHolder.Visible = LShowV > 0.005
+    LS.Scale = LBaseScale * (0.96 + 0.04 * LShowV)
+    LMini.Visible = LMinimized and LShowV < 0.5
+    Ltime = Ltime + DT
+    local fade = 1 - Sat(Ltime / 0.25)
+    fadeF.BackgroundTransparency = 1 - fade
+    fadeF.Visible = fade > 0
+    if LClosing and LShowV < 0.02 then UF.Destroy() end
+end)
+
+Anims.lshow = 0
+LBaseScale = CalcLScale()
+LS.Scale = LBaseScale * 0.96
+SetScreen("splash")
+-- ============================================================ MENU
+local KT = 15.5                      -- основной размер текста меню
+local SCALES = { 100, 125, 150, 175, 200 }
+local gVisible, gSettingsOpen = false, not IS_MOBILE
+local gTab, gSub = 1, 1
+local gSearch = ""
+local gListen = false
+local showV, hintT = 0, 0
+local S = 1
+
+local MG = {}
+MG.menu = Group(function() return showV > 0.005 end)
+MG.set  = Group(function() return showV > 0.005 and gSettingsOpen end)
+MG.pop  = Group()
+MG.back = Group()
+
+local function Th(o, prop, key) Stat(function() o[prop] = P[key] end) end
+
+local KN = {
+    Insert = "INS", Delete = "DEL", Home = "HOME", End = "END", PageUp = "PGUP", PageDown = "PGDN",
+    LeftShift = "LSHIFT", RightShift = "RSHIFT", LeftControl = "LCTRL", RightControl = "RCTRL",
+    LeftAlt = "LALT", RightAlt = "RALT", Space = "SPACE", Escape = "ESC", Return = "ENTER", Tab = "TAB",
+    Backspace = "BKSP", CapsLock = "CAPS", MouseButton3 = "MMB",
+}
+local function KeyName(k) if not k then return "NONE" end return KN[k.Name] or k.Name:upper() end
+
+local function CalcMenuScale()
+    local v = VP()
+    if st.scaleIdx > 1 then return SCALES[st.scaleIdx - 1] / 100 end
+    if IS_MOBILE then
+        return clamp(min(v.X * 0.97 / 838, (v.Y - 46) * 0.95 / 559), 0.3, 1.5)
+    end
+    local s = clamp(floor(v.Y / 1080 * 20 + 0.5) / 20, 0.6, 2)
+    return clamp(min(s, v.X * 0.95 / 838, v.Y * 0.92 / 559), 0.4, 2)
+end
+
+-- ============================================================ окна
+local function MakeWin(w, h, R)
+    local W = { w = w, h = h }
+    W.holder = Frame(LayerMenu, 0, 0, 0, 0, nil)
+    W.scaled = Frame(W.holder, 0, 0, w, h, nil)
+    W.uis = Instance.new("UIScale"); W.uis.Parent = W.scaled
+    W.shadow = {}
+    for i = 1, 8 do
+        local e = i * 2
+        local f = Frame(W.scaled, -e, -e + 4, w + e * 2, h + e * 2, BLACK, R + e)
+        W.shadow[i] = f
+    end
+    local b = Instance.new("CanvasGroup")
+    b.BorderSizePixel = 0; b.Size = UDim2.fromOffset(w, h); b.Active = true
+    Corner(b, R)
+    b.Parent = W.scaled
+    W.body = b
+    DragWindow(b, W.holder)
+    return W
+end
+local function WinShow(W, show)
+    W.scaled.Position = UDim2.fromOffset(0, (1 - show) * 8 * S)
+    W.body.GroupTransparency = 1 - show
+    for i, f in ipairs(W.shadow) do
+        f.Visible = not st.disableShadows
+        f.BackgroundTransparency = 1 - (14 / 255) * show
+    end
+end
+
+local MW = MakeWin(838, 559, 6)
+local SW = MakeWin(323, 455, 6)
+Th(MW.body, "BackgroundColor3", "content")
+Th(SW.body, "BackgroundColor3", "win")
+do
+    local s1 = Stroke(MW.body, P.outer, 1); Stat(function() s1.Color = P.outer end)
+    local s2 = Stroke(SW.body, P.winBorder, 1); Stat(function() s2.Color = P.winBorder end)
+end
+
+-- ============================================================ левая рельса и сайдбар
+local TABS = {
+    { "world", "World", { { "crosshair", "Combat" }, { "eye", "Visual" }, { "shapes", "Misc" } } },
+    { "heroes", "Heroes" }, { "image", "Info Screen" }, { "bolt", "Abilities" }, { "sparkles", "Effects" },
+    { "tools", "Utility" }, { "code", "Scripts" }, { "cloud", "Cloud" },
+}
+local BRAND = "UmbrellaFan"
+do
+    local B = MW.body
+    local rail = Frame(B, 0, 0, 49, 559, P.rail, 6); Th(rail, "BackgroundColor3", "rail")
+    local railF = Frame(B, 24, 0, 25, 559, P.rail); Th(railF, "BackgroundColor3", "rail")
+    local side = Frame(B, 49, 0, 162.5, 559, P.side); Th(side, "BackgroundColor3", "side")
+    local l1 = Frame(B, 49, 0, 1, 559, P.border1); Th(l1, "BackgroundColor3", "border1")
+    local l2 = Frame(B, 211, 0, 1, 559, P.border2); Th(l2, "BackgroundColor3", "border2")
+
+    MakeLogo(B, 24.5, 25, 15 / cos(pi / 8), MenuLogoCols)
+
+    local tabs = {}
+    for i, t in ipairs(TABS) do
+        local cx, cy = 24.5, 75.5 + 41 * (i - 1)
+        local sel = Frame(B, cx - 17.5, cy - 16.25, 35, 32.5, P.sel, 4); Th(sel, "BackgroundColor3", "sel")
+        local glow = {}
+        for k = 0, 2 do glow[k] = Circ(B, cx, cy, 18 - k * 4.5, P.accent); Th(glow[k], "BackgroundColor3", "accent") end
+        local bar = Frame(B, 2.5, cy, 2, 0, P.accent, 1); Th(bar, "BackgroundColor3", "accent")
+        local ic = Icon(B, t[1], cx, cy, 16, P.railIcon)
+        local hit = Hit(B, cx - 17.5, cy - 16.25, 35, 32.5)
+        hit.click(function() if gTab ~= i then gTab = i; gSub = 1 end end)
+        Tip(hit, function() return T(t[2]) end, "menu", 0.4)
+        Dyn(MG.menu, function()
+            local s = Anim(hit, gTab == i and 1 or 0)
+            local hv = Anim(hit.btn, hit.over() and 1 or 0)
+            local a = max(s, hv * 0.6)
+            sel.BackgroundTransparency = a > 0.01 and 1 - a or 1
+            for k = 0, 2 do glow[k].BackgroundTransparency = s > 0.01 and 1 - s * (0.05 + k * 0.035) or 1 end
+            bar.Visible = s > 0.01
+            bar.Size = UDim2.fromOffset(2, 12 * s); bar.Position = UDim2.fromOffset(2.5, cy - 6 * s)
+            ic.set(Mix(P.railIcon, P.accent, s))
+        end)
+    end
+    -- шестерёнка настроек
+    do
+        local cx, cy = 24.5, 559 - 32.5
+        local ic = Icon(B, "gear", cx, cy, 16, P.railIcon)
+        local hit = Hit(B, cx - 17.5, cy - 16, 35, 32)
+        hit.click(function() gSettingsOpen = not gSettingsOpen end)
+        Dyn(MG.menu, function()
+            local hv = Anim(hit, (hit.over() or gSettingsOpen) and 1 or 0)
+            ic.set(Mix(P.railIcon, P.textBright, hv))
+        end)
+    end
+
+    -- заголовок вкладки
+    local tabLab = Lab(B, "", KT, 66, 34, P.sideText, "R", 0, 140); Th(tabLab, "TextColor3", "sideText")
+    Dyn(MG.menu, function() local t = T(TABS[gTab][2]); if tabLab.Text ~= t then tabLab.Text = t end end)
+
+    -- подвкладки
+    local rows = {}
+    for i, sdef in ipairs(TABS[1][3]) do
+        local r = {}
+        r.sel = Frame(B, 60.5, 0, 140, 27.5, P.sel, 3.5); Th(r.sel, "BackgroundColor3", "sel")
+        r.bar = Frame(B, 53.5, 0, 2, 0, P.accent, 1); Th(r.bar, "BackgroundColor3", "accent")
+        r.ic = Icon(B, sdef[1], 76, 0, 16, P.sideText)
+        r.tx = Lab(B, "", KT, 94, 0, P.sideText, "R", 0, 101, 13)
+        r.hit = Hit(B, 60.5, 0, 140, 27.5)
+        r.hit.click(function() gSub = i end)
+        rows[i] = r
+        r.def = sdef
+    end
+    Dyn(MG.menu, function()
+        local tab = TABS[gTab]
+        local q = gSearch:lower()
+        local vis = 0
+        for i, r in ipairs(rows) do
+            local nm = r.def[2]
+            local on = tab[3] ~= nil and (q == "" or T(nm):lower():find(q, 1, true) or nm:lower():find(q, 1, true))
+            r.sel.Visible = on and true or false; r.bar.Visible = r.sel.Visible
+            r.ic.holder.Visible = r.sel.Visible; r.tx.Visible = r.sel.Visible; r.hit.btn.Visible = r.sel.Visible
+            if on then
+                local cy = 76.5 + 33 * vis
+                vis = vis + 1
+                local s = Anim(r.hit, gSub == i and 1 or 0)
+                local hv = Anim(r.hit.btn, r.hit.over() and 1 or 0)
+                r.sel.Position = UDim2.fromOffset(60.5, cy - 13.75); r.hit.btn.Position = r.sel.Position
+                local a = max(s, hv * 0.5)
+                r.sel.BackgroundTransparency = a > 0.01 and 1 - a or 1
+                r.bar.Position = UDim2.fromOffset(53.5, cy - 6 * s); r.bar.Size = UDim2.fromOffset(2, 12 * s)
+                local col = Mix(Mix(P.sideText, P.textBright, hv * 0.35), P.accent, s)
+                r.ic.holder.Position = UDim2.fromOffset(76, cy); r.ic.set(col)
+                r.tx.Position = UDim2.fromOffset(94, cy); r.tx.TextColor3 = col
+                local t = T(nm); if r.tx.Text ~= t then r.tx.Text = t end
+            end
+        end
+    end)
+
+    -- хедер: хлебные крошки + поиск
+    local brand = Lab(B, BRAND, KT, 222, 34, P.crumb, "R", 0, 200); Th(brand, "TextColor3", "crumb")
+    local slash = Lab(B, "/", KT, 0, 34, P.crumb, "R", 0, 20); Th(slash, "TextColor3", "crumb")
+    local page = Lab(B, "", KT, 0, 34, P.accent, "R", 0, 260); Th(page, "TextColor3", "accent")
+    Dyn(MG.menu, function()
+        local tab = TABS[gTab]
+        local nm = tab[3] and tab[3][gSub][2] or tab[2]
+        local t = T(nm); if page.Text ~= t then page.Text = t end
+        local x = 222 + TW(BRAND, KT) + 9
+        slash.Position = UDim2.fromOffset(x, 34)
+        x = x + TW("/", KT) + 10
+        page.Position = UDim2.fromOffset(x, 34)
+    end)
+
+    local sBg = Frame(B, 614, 20.5, 213, 27.5, P.card, 4); Th(sBg, "BackgroundColor3", "card")
+    local sStroke = Stroke(sBg, P.searchBorder, 1); Stat(function() sStroke.Color = P.searchBorder end)
+    local sIc = Icon(B, "search", 628.5, 34, 15, P.placeholder); Stat(function() sIc.set(P.placeholder) end)
+    local box = Instance.new("TextBox")
+    box.BackgroundTransparency = 1; box.BorderSizePixel = 0
+    box.Position = UDim2.fromOffset(641.5, 20.5); box.Size = UDim2.fromOffset(177.5, 27.5)
+    box.FontFace = FONT.R; box.TextSize = KT; box.ClearTextOnFocus = false; box.Text = ""
+    box.TextXAlignment = Enum.TextXAlignment.Left; box.ClipsDescendants = true
+    Th(box, "TextColor3", "text"); Th(box, "PlaceholderColor3", "placeholder")
+    Stat(function() box.PlaceholderText = T("Search") end)
+    box.Parent = B
+    box:GetPropertyChangedSignal("Text"):Connect(function() gSearch = box.Text end)
+    UF.SearchBox = box
+end
+
+-- ============================================================ попапы (комбо / цвет)
+local PopClose, OpenCombo, OpenColor
+do
+local Pop = { cur = nil }
+local popBlock = Instance.new("TextButton")
+popBlock.Text = ""; popBlock.AutoButtonColor = false; popBlock.BackgroundTransparency = 1
+popBlock.Size = UDim2.fromScale(1, 1); popBlock.Visible = false; popBlock.Parent = LayerPop
+local popHolder = Frame(LayerPop, 0, 0, 0, 0, nil)
+local popScaled = Frame(popHolder, 0, 0, 100, 100, nil)
+local popUIS = Instance.new("UIScale"); popUIS.Parent = popScaled
+local popBody = Instance.new("CanvasGroup")
+popBody.BorderSizePixel = 0; popBody.Size = UDim2.fromScale(1, 1); popBody.Active = true
+local popCorner = Corner(popBody, 4)
+local popStroke = Stroke(popBody, P.popupBorder, 1)
+popBody.Parent = popScaled
+popHolder.Visible = false
+Stat(function() popBody.BackgroundColor3 = P.popup; popStroke.Color = P.popupBorder end)
+
+local popPos = Vector2.new()
+function PopClose()
+    Pop.cur = nil; popBlock.Visible = false; popHolder.Visible = false
+    MG.pop.dyn = {}
+end
+popBlock.Activated:Connect(PopClose)
+local function PopBegin(w, h, px, py, r)
+    PopClose()
+    for _, c in ipairs(popBody:GetChildren()) do
+        if not c:IsA("UICorner") and not c:IsA("UIStroke") then c:Destroy() end
+    end
+    popCorner.CornerRadius = UDim.new(0, r)
+    popScaled.Size = UDim2.fromOffset(w, h)
+    popUIS.Scale = S
+    local v, o = VP(), Gui.AbsolutePosition
+    px, py = px - o.X, py - o.Y
+    px = clamp(px, 4, max(4, v.X - w * S - 4)); py = clamp(py, 4, max(4, v.Y - h * S - 4))
+    popPos = Vector2.new(floor(px), floor(py))
+    Pop.cur = true; popBlock.Visible = true; popHolder.Visible = true
+    Anims.popfade = 0
+    Dyn(MG.pop, function()
+        local f = Anim("popfade", 1, 20)
+        popBody.GroupTransparency = 1 - f
+        popHolder.Position = UDim2.fromOffset(popPos.X, popPos.Y - (1 - f) * 5 * S)
+    end)
+end
+
+function OpenCombo(box, items, getIdx, setIdx)
+    local n, ih, pad, w = #items, 25, 2.5, 120
+    local h = ih * n + pad * 2
+    local ap, as = box.AbsolutePosition, box.AbsoluteSize
+    local py = (n == 1) and ap.Y or (ap.Y + as.Y / 2 - h * S / 2)
+    PopBegin(w, h, ap.X, py, 4)
+    local sel = getIdx()
+    for i = 1, n do
+        local y = pad + (i - 1) * ih
+        local bg = Frame(popBody, 3, y, w - 6, ih, P.comboHover, 3)
+        local hit = Hit(popBody, 3, y, w - 6, ih)
+        local tx
+        if sel == i then
+            local ck = Icon(popBody, "check", 17.5, y + ih / 2, 14, P.accent)
+            tx = Lab(popBody, T(items[i]), KT, 30.5, y + ih / 2, P.accent, "R", 0, w - 36, 8)
+            Dyn(MG.pop, function() ck.set(P.accent); tx.TextColor3 = P.accent end)
+        else
+            tx = Lab(popBody, T(items[i]), KT, 12, y + ih / 2, P.text, "R", 0, w - 18, 8)
+            Dyn(MG.pop, function() tx.TextColor3 = Mix(P.text, P.textBright, 0.7) end)
+        end
+        hit.click(function() setIdx(i); PopClose() end)
+        Dyn(MG.pop, function()
+            local t = Anim(hit, hit.over() and 1 or 0, 20)
+            bg.BackgroundColor3 = P.comboHover
+            bg.BackgroundTransparency = t > 0.01 and 1 - t or 1
+        end)
+    end
+end
+
+-- выбор своего цвета
+local CP = { h = 0, s = 1, v = 1 }
+function OpenColor(cx, cy)
+    local w, h = 230, 250
+    PopBegin(w, h, cx - 115 * S, cy + 14 * S, 5)
+    CP.h, CP.s, CP.v = st.customAccent:ToHSV()
+    local title = Lab(popBody, T("Custom color"), KT, 12, 16, P.title, "R", 0, 200)
+    local sv = Frame(popBody, 12, 32, 170, 170, Color3.fromHSV(CP.h, 1, 1), 4)
+    local g1 = Frame(sv, 0, 0, 170, 170, WHITE, 4)
+    local gg1 = Instance.new("UIGradient"); gg1.Transparency = NumberSequence.new(0, 1); gg1.Parent = g1
+    local g2 = Frame(sv, 0, 0, 170, 170, BLACK, 4)
+    local gg2 = Instance.new("UIGradient"); gg2.Rotation = 90; gg2.Transparency = NumberSequence.new(1, 0); gg2.Parent = g2
+    local cur = Frame(sv, 0, 0, 10, 10, nil, CIRC); Stroke(cur, WHITE, 1.6)
+    local svHit = Hit(popBody, 12, 32, 170, 170)
+
+    local hue = Frame(popBody, 192, 32, 22, 170, WHITE, 4)
+    local hg = Instance.new("UIGradient"); hg.Rotation = 90
+    hg.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 1, 1)), ColorSequenceKeypoint.new(1 / 6, Color3.fromHSV(1 / 6, 1, 1)),
+        ColorSequenceKeypoint.new(2 / 6, Color3.fromHSV(2 / 6, 1, 1)), ColorSequenceKeypoint.new(3 / 6, Color3.fromHSV(3 / 6, 1, 1)),
+        ColorSequenceKeypoint.new(4 / 6, Color3.fromHSV(4 / 6, 1, 1)), ColorSequenceKeypoint.new(5 / 6, Color3.fromHSV(5 / 6, 1, 1)),
+        ColorSequenceKeypoint.new(1, Color3.fromHSV(0, 1, 1)),
+    })
+    hg.Parent = hue
+    local mark = Frame(popBody, 189, 32, 28, 4, WHITE, 2); Stroke(mark, BLACK, 1, 0.5)
+    local hueHit = Hit(popBody, 188, 28, 30, 178)
+    local hex = Lab(popBody, "", KT, 12, 224, P.text, "R", 0, 200)
+
+    local function Push()
+        st.customAccent = Color3.fromHSV(CP.h, CP.s, CP.v)
+        st.theme = NTHEME + 1
+        ApplyTheme(false)
+    end
+    Dragger(svHit.btn, nil, function(p)
+        local ap, as = sv.AbsolutePosition, sv.AbsoluteSize
+        CP.s = Sat((p.X - ap.X) / as.X); CP.v = 1 - Sat((p.Y - ap.Y) / as.Y); Push()
+    end)
+    Dragger(hueHit.btn, nil, function(p)
+        local ap, as = hue.AbsolutePosition, hue.AbsoluteSize
+        CP.h = min(0.9999, Sat((p.Y - ap.Y) / as.Y)); Push()
+    end)
+    Dyn(MG.pop, function()
+        title.TextColor3 = P.title; hex.TextColor3 = P.text
+        sv.BackgroundColor3 = Color3.fromHSV(CP.h, 1, 1)
+        cur.Position = UDim2.fromOffset(CP.s * 170 - 5, (1 - CP.v) * 170 - 5)
+        mark.Position = UDim2.fromOffset(189, 32 + CP.h * 170 - 2)
+        local c = st.customAccent
+        hex.Text = string.format("#%02X%02X%02X", floor(c.R * 255 + 0.5), floor(c.G * 255 + 0.5), floor(c.B * 255 + 0.5))
+    end)
+end
+
+end
+
+-- ============================================================ настройки: карточки и строки
+local function Card(parent, g, title, x, y, w)
+    local C = { x = x, y = y, w = w, cur = 32.5, first = true, pad = 12, g = g }
+    C.f = Frame(parent, x, y, w, 100, P.card, 5); Th(C.f, "BackgroundColor3", "card")
+    local s = Stroke(C.f, P.cardBorder, 1); Stat(function() s.Color = P.cardBorder end)
+    local tl = Lab(C.f, function() return T(title) end, KT, 12, 18.5, P.title, "R", 0, w - 24); Th(tl, "TextColor3", "title")
+    function C.row(h)
+        if not C.first then
+            local l = Frame(C.f, C.pad, C.cur, w - C.pad * 2, 1, P.sep); Th(l, "BackgroundColor3", "sep")
+        end
+        C.first = false
+        local r = { y0 = C.cur, h = h, cy = C.cur + h / 2 }
+        C.cur = C.cur + h
+        return r
+    end
+    function C.done() C.f.Size = UDim2.fromOffset(w, C.cur); return C.cur end
+    return C
+end
+
+local function RowLabel(C, r, icon, label, rightLimit, cy)
+    cy = cy or r.cy
+    local x = 12
+    if icon then
+        local ic = Icon(C.f, icon, 22, cy, 15, P.accent); Stat(function() ic.set(P.accent) end)
+        x = 40
+    end
+    local l = Lab(C.f, function() return T(label) end, KT, x, cy, P.text, "R", 0, rightLimit - x, 12)
+    return l, x
+end
+
+local function RowKey(C, icon, label)
+    local r = C.row(38)
+    local right = C.w - 12
+    local lab = RowLabel(C, r, icon, label, right - 44)
+    Th(lab, "TextColor3", "text")
+    local bx = Frame(C.f, right - 35, r.cy - 8, 35, 16, P.keyBox, 2)
+    local tx = Lab(C.f, "", 13.3, right, r.cy, P.keyText, "R", 0.5, 100)
+    local hit = Hit(C.f, right - 35, r.cy - 8, 35, 16)
+    local dots = {}
+    for i = 1, 3 do dots[i] = Circ(C.f, 0, r.cy, 1.9, P.keyText) end
+    hit.click(function() gListen = not gListen end)
+    Tip(hit, function() return gListen and T("Press a key... (Esc = cancel)") or nil end, "menu", 0)
+    Dyn(C.g, function()
+        local name = KeyName(st.menuKey)
+        local bw = gListen and 35 or max(35, TW(name, 13.3) + 12)
+        bx.Size = UDim2.fromOffset(bw, 16); bx.Position = UDim2.fromOffset(right - bw, r.cy - 8)
+        hit.btn.Size = bx.Size; hit.btn.Position = bx.Position
+        bx.BackgroundColor3 = hit.over() and Mix(P.keyBox, P.textBright, 0.06) or P.keyBox
+        tx.Position = UDim2.fromOffset(right - bw / 2, r.cy)
+        tx.Visible = not gListen; tx.Text = name; tx.TextColor3 = P.keyText
+        for i = 1, 3 do
+            dots[i].Visible = gListen
+            if gListen then
+                local k = i - 2
+                dots[i].Position = UDim2.fromOffset(right - bw / 2 + k * 6.5 - 1.9, r.cy - 1.9)
+                dots[i].BackgroundColor3 = P.keyText
+                dots[i].BackgroundTransparency = 1 - (0.55 + 0.45 * sin(NOW * 6 - k * 0.9))
+            end
+        end
+    end)
+end
+
+local function RowCombo(C, icon, label, getIdx, setIdx, items)
+    local r = C.row(44)
+    local right = C.w - 12
+    local ca = right - 120
+    local lab = RowLabel(C, r, icon, label, ca - 4)
+    Th(lab, "TextColor3", "text")
+    local box = Frame(C.f, ca, r.cy - 12, 120, 24, P.combo, 4)
+    local txt = Lab(C.f, "", KT, ca + 8.5, r.cy, P.text, "R", 0, 88, 11)
+    local chev = Icon(C.f, "chev", ca + 105, r.cy + 0.3, 11, P.text)
+    local hit = Hit(C.f, ca, r.cy - 12, 120, 24)
+    hit.click(function() OpenCombo(box, items, getIdx, setIdx) end)
+    Dyn(C.g, function()
+        local t = Anim(hit, hit.over() and 1 or 0)
+        box.BackgroundColor3 = Mix(P.combo, P.comboHover, t)
+        local c = Mix(P.text, P.textBright, t * 0.4)
+        txt.TextColor3 = c; chev.set(c)
+        local s = T(items[clamp(getIdx(), 1, #items)])
+        if txt.Text ~= s then txt.Text = s end
+    end)
+end
+
+local function RowSlider(C, icon, label, get, set, mn, mx, fmt, h, labelOff, trackOff)
+    local r = C.row(h)
+    local right = C.w - 12
+    local ly, ty = r.y0 + labelOff, r.y0 + trackOff
+    local lab = RowLabel(C, r, icon, label, right - 50, ly)
+    Th(lab, "TextColor3", "text")
+    local val = Lab(C.f, "", KT, right, ly, P.text, "R", 1, 60)
+    local tw = right - 12
+    local track = Frame(C.f, 12, ty - 2.5, tw, 5, P.sliderBg, 2.5)
+    local fill = Frame(C.f, 12, ty - 2.5, 10, 5, P.accent, 2.5)
+    local knob = Circ(C.f, 0, ty, 6, P.knob)
+    local ks = Stroke(knob, P.popupBorder, 1, 0.2)
+    local hit = Hit(C.f, 8, ty - 9, tw + 8, 18)
+    local isInt = fmt:find("%%.0f") ~= nil
+    Dragger(hit.btn, nil, function(p)
+        local ap = track.AbsolutePosition
+        local t = Sat((p.X - ap.X - 6 * S) / ((tw - 12) * S))
+        local nv = mn + (mx - mn) * t
+        if isInt then nv = floor(nv + 0.5) end
+        set(nv)
+    end)
+    Dyn(C.g, function()
+        local v = get()
+        val.Text = string.format(fmt, v); val.TextColor3 = P.text
+        local t = Sat((v - mn) / (mx - mn))
+        local kx = 12 + 6 + (tw - 12) * t
+        track.BackgroundColor3 = P.sliderBg
+        fill.BackgroundColor3 = P.accent; fill.Size = UDim2.fromOffset(kx - 12, 5)
+        local ka = Anim(hit, (hit.down or hit.over()) and 1 or 0)
+        local rr = 6 + ka * 0.8
+        knob.Size = UDim2.fromOffset(rr * 2, rr * 2); knob.Position = UDim2.fromOffset(kx - rr, ty - rr)
+        knob.BackgroundColor3 = P.knob; ks.Color = P.popupBorder
+    end)
+end
+
+local function RowToggle(C, icon, label, get, set)
+    local r = C.row(38)
+    local right = C.w - 12
+    local ic = Icon(C.f, icon, 22, r.cy, 15, P.iconOff)
+    local lab = Lab(C.f, function() return T(label) end, KT, 40, r.cy, P.text, "R", 0, right - 34 - 40, 12)
+    local track = Frame(C.f, right - 30, r.cy - 8, 30, 16, P.offTrack, 8)
+    local knob = Circ(C.f, 0, r.cy, 8, P.knobOff)
+    local hit = Hit(C.f, 0, r.y0, C.w, 38)
+    hit.click(function() set(not get()) end)
+    Dyn(C.g, function()
+        local on = get()
+        local t = Anim(knob, on and 1 or 0, 16)
+        local lt = Anim(lab, on and 1 or 0, 16)
+        local tc = Mix(P.text, P.textBright, lt)
+        if hit.over() and not on then tc = Mix(tc, P.textBright, 0.25) end
+        lab.TextColor3 = tc
+        ic.set(Mix(P.iconOff, P.accent, lt))
+        track.BackgroundColor3 = Mix(P.offTrack, Mix(P.card, P.accent, 0.17), t)
+        local kx = right - 30 + 8 + (30 - 16) * t
+        knob.Position = UDim2.fromOffset(kx - 8, r.cy - 8)
+        knob.BackgroundColor3 = Mix(P.knobOff, P.accent, t)
+    end)
+end
+
+-- ============================================================ окно настроек
+local ApplyScale
+do
+    local B = SW.body
+    local ic = Icon(B, "folder", 14.5, 14.5, 15, P.text, P.win); Stat(function() ic.set(P.text, P.win) end)
+    local ttl = Lab(B, function() return T("Settings") end, KT, 26, 15, P.text, "R", 0, 200)
+    Dyn(MG.set, function() ttl.TextColor3 = Mix(P.text, P.textBright, 0.3) end)
+    local cx = Icon(B, "xmark", 312, 14.5, 15, P.text)
+    local ch = Hit(B, 302, 4.5, 20, 20)
+    ch.click(function() gSettingsOpen = false end)
+    Dyn(MG.set, function() cx.set(ch.over() and P.textBright or P.text) end)
+    local sep = Frame(B, 0, 27, 323, 1, P.winBorder); Th(sep, "BackgroundColor3", "winBorder")
+
+    local cw = 294
+    local c1 = Card(B, MG.set, "Main", 14.5, 41.5, cw)
+    RowKey(c1, "keyboard", "Menu Bind")
+    RowCombo(c1, "language", "Language", function() return st.lang == "en" and 1 or 2 end,
+        function(i) st.lang = i == 1 and "en" or "ru"; Ver = Ver + 1 end, { "en", "ru" })
+    RowSlider(c1, "clock", "Animation Duration", function() return st.animDur end, function(v) st.animDur = v end,
+        10, 250, "%.0f%%", 55, 18, 39)
+    local h1 = c1.done()
+
+    local c2 = Card(B, MG.set, "Appearance", 14.5, 41.5 + h1 + 14.5, cw)
+    RowSlider(c2, "droplet", "Menu Blur Factor", function() return st.blur end, function(v) st.blur = v end,
+        0.30, 1.0, "%.2f", 54.5, 18, 38.5)
+    RowToggle(c2, "halfcircle", "Disable Shadows", function() return st.disableShadows end, function(v) st.disableShadows = v end)
+    RowCombo(c2, "expand", "Menu Scale", function() return st.scaleIdx end,
+        function(i) st.scaleIdx = i; ApplyScale() end, { "Auto", "100", "125", "150", "175", "200" })
+    -- тема
+    do
+        local r = c2.row(45)
+        local tl = Lab(c2.f, function() return T("Theme") end, KT, 12, r.cy - 1.5, P.text, "R", 0, 80); Th(tl, "TextColor3", "text")
+        for i = 1, NTHEME + 1 do
+            local cx2 = 98.5 + 22 * (i - 1)
+            local hit = Hit(c2.f, cx2 - 10, r.cy - 10, 20, 20)
+            if i <= NTHEME then
+                local td = THEMES[i]
+                local base = Circ(c2.f, cx2, r.cy, 7.5, td.base)
+                local ring = Frame(c2.f, cx2 - 9, r.cy - 9, 18, 18, nil, CIRC); local rs = Stroke(ring, td.acc, 1.3)
+                Circ(c2.f, cx2, r.cy, 4.3, td.acc)
+                hit.click(function() st.theme = i; ApplyTheme(false) end)
+                Tip(hit, function() return T("Theme") end, "menu", 0.4)
+                Dyn(MG.set, function()
+                    local sa = Anim(hit, st.theme == i and 1 or 0)
+                    local ha = Anim(hit.btn, hit.over() and 1 or 0)
+                    local rr = 7.5 + ha * 0.5
+                    base.Size = UDim2.fromOffset(rr * 2, rr * 2); base.Position = UDim2.fromOffset(cx2 - rr, r.cy - rr)
+                    rs.Transparency = 1 - sa
+                end)
+            else
+                local base = Circ(c2.f, cx2, r.cy, 8, P.offTrack)
+                local ring = Frame(c2.f, cx2 - 9.5, r.cy - 9.5, 19, 19, nil, CIRC); local rs = Stroke(ring, P.accent, 1.3)
+                local pl = Icon(c2.f, "plus", cx2, r.cy, 11, P.text)
+                hit.click(function()
+                    local ap, as = hit.btn.AbsolutePosition, hit.btn.AbsoluteSize
+                    OpenColor(ap.X + as.X / 2, ap.Y + as.Y / 2)
+                end)
+                Tip(hit, function() return T("Custom color") end, "menu", 0.4)
+                Dyn(MG.set, function()
+                    local sa = Anim(hit, st.theme == NTHEME + 1 and 1 or 0)
+                    local ha = Anim(hit.btn, hit.over() and 1 or 0)
+                    base.BackgroundColor3 = Mix(P.offTrack, P.comboHover, ha)
+                    rs.Color = st.customAccent; rs.Transparency = 1 - sa
+                    pl.set(P.text)
+                end)
+            end
+        end
+    end
+    c2.done()
+end
+
+-- ============================================================ подложка (backdrop + blur)
+local bd = Frame(LayerBack, 0, 0, 0, 0, WHITE); bd.Size = UDim2.fromScale(1, 1)
+local bdg = Instance.new("UIGradient"); bdg.Rotation = 90; bdg.Parent = bd
+Stat(function() bdg.Color = ColorSequence.new(P.backdropTop, P.backdropBottom) end)
+local bdDark = Frame(LayerBack, 0, 0, 0, 0, BLACK); bdDark.Size = UDim2.fromScale(1, 1)
+bd.Visible = false; bdDark.Visible = false
+local hintLab = Lab(LayerBack, "", KT + 1, 0, 0, RGB(150, 150, 150), "R", 0.5, 700)
+hintLab.Position = UDim2.fromScale(0.5, 0.5)
+local blurFx
+pcall(function()
+    blurFx = Instance.new("BlurEffect"); blurFx.Size = 0; blurFx.Enabled = false; blurFx.Name = "UmbrellaFanBlur"
+    blurFx.Parent = game:GetService("Lighting")
+end)
+
+-- ============================================================ раскладка окон
+local function ClampWin(W)
+    local v = VP()
+    local p = W.holder.Position
+    local w, h = W.w * S, W.h * S
+    W.holder.Position = UDim2.fromOffset(clamp(p.X.Offset, -w + 80, v.X - 80), clamp(p.Y.Offset, 0, v.Y - 40))
+end
+local function Layout()
+    local v = VP()
+    local sW, sH, stW, gap = 838 * S, 559 * S, 323 * S, 16 * S
+    local top = IS_MOBILE and 40 or 0
+    local my = max(top + 4, (v.Y - sH) / 2 + top / 2)
+    if not IS_MOBILE and sW + gap + stW <= v.X * 0.98 then
+        local x0 = (v.X - (sW + gap + stW)) / 2
+        MW.holder.Position = UDim2.fromOffset(x0, my)
+        SW.holder.Position = UDim2.fromOffset(x0 + sW + gap, my)
+    else
+        local mx = (v.X - sW) / 2
+        MW.holder.Position = UDim2.fromOffset(mx, my)
+        SW.holder.Position = UDim2.fromOffset(max(4, mx + sW - stW - 10 * S), my + 30 * S)
+    end
+end
+function ApplyScale()
+    S = CalcMenuScale()
+    MW.uis.Scale = S; SW.uis.Scale = S
+    MW.scaled.Size = UDim2.fromOffset(838, 559)
+    ClampWin(MW); ClampWin(SW)
+end
+
+-- кадр меню
+Dyn(MG.back, function()
+    showV = Anim("show", gVisible and 1 or 0, 14)
+    local on = showV > 0.005
+    MW.holder.Visible = on; SW.holder.Visible = on and gSettingsOpen
+    bd.Visible = on; bdDark.Visible = on
+    bd.BackgroundTransparency = 1 - 0.55 * showV
+    bdDark.BackgroundTransparency = 1 - (st.blur * 120 / 255) * showV
+    if on then WinShow(MW, showV); WinShow(SW, showV) end
+    if blurFx then
+        blurFx.Enabled = on
+        blurFx.Size = ((st.blur - 0.30) / 0.70) * 18 * showV
+    end
+    if not gVisible and hintT > 0 then hintT = hintT - DT end
+    local ha = (1 - showV) * Sat(hintT)
+    hintLab.Visible = ha > 0.01
+    hintLab.TextTransparency = 1 - ha
+    local msg = IS_MOBILE and T("Tap the strip at the top to open the menu")
+        or (T("Press") .. " " .. KeyName(st.menuKey) .. " " .. T("to open the menu"))
+    if hintLab.Text ~= msg then hintLab.Text = msg end
+end)
+
+function UF.SetMenuVisible(v)
+    if gVisible == v then return end
+    gVisible = v
+    if not v then
+        PopClose()
+        hintT = 3.5
+        if UF.SearchBox then UF.SearchBox:ReleaseFocus() end
+    end
+end
+function UF.ToggleMenu() UF.SetMenuVisible(not gVisible) end
+function UF.ToggleSettings() gSettingsOpen = not gSettingsOpen; if gSettingsOpen and not gVisible then UF.SetMenuVisible(true) end end
+function UF.MenuVisible() return gVisible end
+function UF.IsListening() return gListen end
+function UF.StopListening() gListen = false end
+function UF.SetKey(k) st.menuKey = k; gListen = false end
+function UF.RefreshLayout() ApplyScale(); Layout() end
+
+ApplyScale()
+Layout()
+-- ============================================================ tooltip + toast
+local UpdateTip, UpdateToast
+do
+local tipF = Frame(LayerTop, 0, 0, 100, 26, LC.TIP, 6); tipF.Visible = false
+local tipS = Stroke(tipF, LC.BORDER, 1)
+local tipL = Lab(tipF, "", 13, 8, 13, LC.TEXT, "R", 0, 600)
+
+local toastF = Frame(LayerTop, 0, 0, 100, 34, LC.POPUP, 17)
+toastF.AnchorPoint = Vector2.new(0.5, 0); toastF.Visible = false
+local toastS = Stroke(toastF, LC.BORDER, 1)
+local toastL = Lab(toastF, "", 14, 50, 17, LC.WHITE, "M", 0.5, 800)
+
+function UpdateTip()
+    local text, style
+    for _, t in ipairs(Tips) do
+        if t.s.over() then t.s.t = t.s.t + DT else t.s.t = 0 end
+        if not text and t.s.t >= t.delay and not IS_MOBILE then
+            local s = t.fn()
+            if s then text, style = s, t.style end
+        end
+    end
+    if not text then tipF.Visible = false; return end
+    local size = style == "loader" and 13 or 14
+    local w = TW(text, size) + 18
+    tipL.TextSize = size; tipL.Text = text
+    tipL.Position = UDim2.fromOffset(w / 2, 13); tipL.Size = UDim2.fromOffset(w, 22)
+    tipL.TextXAlignment = Enum.TextXAlignment.Center; tipL.AnchorPoint = Vector2.new(0.5, 0.5)
+    if style == "loader" then
+        tipF.BackgroundColor3 = LC.TIP; tipS.Color = LC.BORDER; tipL.TextColor3 = LC.TEXT
+    else
+        tipF.BackgroundColor3 = P.win; tipS.Color = P.popupBorder; tipL.TextColor3 = P.text
+    end
+    local m = UIS:GetMouseLocation() - Gui.AbsolutePosition
+    local v = VP()
+    tipF.Size = UDim2.fromOffset(w, 26)
+    tipF.Position = UDim2.fromOffset(clamp(m.X + 14, 4, v.X - w - 4), clamp(m.Y + 18, 4, v.Y - 30))
+    tipF.Visible = true
+end
+
+function UpdateToast()
+    if ToastT <= 0 then toastF.Visible = false; return end
+    ToastT = ToastT - DT
+    local a = min(Sat(ToastT / 0.35), Sat((2.6 - ToastT) / 0.2))
+    local w = TW(ToastText, 14, 1.04) + 36
+    toastL.Text = ToastText
+    toastL.Position = UDim2.fromOffset(w / 2, 17); toastL.Size = UDim2.fromOffset(w, 30)
+    toastF.Size = UDim2.fromOffset(w, 34)
+    toastF.Position = UDim2.new(0.5, 0, 0, (IS_MOBILE and 52 or 22) - (1 - a) * 10)
+    toastF.BackgroundTransparency = 1 - a; toastS.Transparency = 1 - a
+    toastL.TextTransparency = 1 - a
+    toastF.Visible = true
+end
+
+end
+
+-- ============================================================ полоска сверху (телефон)
+local stripF, stripShow = nil, 0
+local menuReady = false
+if IS_MOBILE then
+    local sw = clamp(VP().X - 24, 220, 300)
+    stripF = Frame(LayerTop, 0, 0, sw, 32, P.win, 16)
+    stripF.AnchorPoint = Vector2.new(0.5, 0); stripF.Visible = false
+    stripF.Active = true
+    Th(stripF, "BackgroundColor3", "win")
+    local ss = Stroke(stripF, P.winBorder, 1); Stat(function() ss.Color = P.winBorder end)
+    local whole = Hit(stripF, 0, 0, sw, 32)
+    whole.click(function() if menuReady then UF.ToggleMenu() end end)
+    MakeLogo(stripF, 20, 16, 9, MenuLogoCols)
+    local nm = Lab(stripF, BRAND, 14, 36, 16, P.textBright, "SB", 0, 100); Th(nm, "TextColor3", "textBright")
+    -- телеграм
+    TGIcon(stripF, sw - 100, 16, 9)
+    local tgH = Hit(stripF, sw - 114, 2, 28, 28); tgH.click(OpenTelegram)
+    -- настройки
+    local gi = Icon(stripF, "gear", sw - 62, 16, 16, P.railIcon)
+    local gH = Hit(stripF, sw - 76, 2, 28, 28); gH.click(function() if menuReady then UF.ToggleSettings() end end)
+    -- показать / скрыть меню
+    local ci = Icon(stripF, "chev", sw - 24, 16, 14, P.railIcon)
+    local cH = Hit(stripF, sw - 38, 2, 28, 28); cH.click(function() if menuReady then UF.ToggleMenu() end end)
+    Dyn(MG.back, function()
+        gi.set(Mix(P.railIcon, P.accent, Anim(gH, gH.over() and 1 or 0)))
+        ci.set(P.railIcon)
+        ci.root.Rotation = 180 * (1 - showV)
+        stripShow = Anim("strip", menuReady and 1 or 0, 12)
+        stripF.Visible = stripShow > 0.01
+        stripF.Position = UDim2.new(0.5, 0, 0, 6 - (1 - stripShow) * 44)
+    end)
+end
+
+-- ============================================================ lifecycle
+function UF.LaunchDone()
+    LShowT = 0; LMinimized = false
+    menuReady = true
+    UF.SetMenuVisible(true)
+    Toast(TR("MM2: запущено", "MM2: launched"))
+    if type(UF.OnLaunch) == "function" then pcall(UF.OnLaunch) end
+end
+
+local destroyed = false
+function UF.Destroy()
+    if destroyed then return end
+    destroyed = true
+    for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
+    pcall(function() if blurFx then blurFx:Destroy() end end)
+    pcall(function() Gui:Destroy() end)
+    ENV.__UmbrellaFan = nil
+end
+UF.OnLaunch = function() end     -- сюда можно повесить свой код (запуск MM2-модуля)
+UF.Key = function() return "см. " .. TG_HANDLE end
+ENV.__UmbrellaFan = UF
+
+-- ============================================================ input
+Con(UIS.InputBegan, function(input)
+    if gListen then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            if input.KeyCode == Enum.KeyCode.Escape then UF.StopListening() else UF.SetKey(input.KeyCode) end
+        elseif input.UserInputType == Enum.UserInputType.MouseButton3 then
+            UF.SetKey(Enum.UserInputType.MouseButton3)
+        end
+        return
+    end
+    if not menuReady or UIS:GetFocusedTextBox() then return end
+    if input.KeyCode == st.menuKey or input.UserInputType == st.menuKey then UF.ToggleMenu() end
+end)
+
+local function OnViewport()
+    LBaseScale = CalcLScale()
+    UF.RefreshLayout()
+end
+local function HookCamera()
+    local cam = workspace.CurrentCamera
+    if cam then Con(cam:GetPropertyChangedSignal("ViewportSize"), OnViewport) end
+end
+HookCamera()
+Con(workspace:GetPropertyChangedSignal("CurrentCamera"), function() HookCamera(); OnViewport() end)
+
+-- ============================================================ main loop
+local failed = {}
+local function Run(fn)
+    local ok, err = pcall(fn)
+    if not ok and not failed[fn] then
+        failed[fn] = true
+        warn("[UmbrellaFan] " .. tostring(err))
+    end
+end
+
+local function Step(dt)
+    DT = clamp(dt, 0.0001, 0.1)
+    NOW = NOW + DT
+    TickPalette()
+    if Ver ~= DoneVer then
+        DoneVer = Ver
+        for i = 1, #Static do Run(Static[i]) end
+    end
+    for i = #Drags, 1, -1 do
+        local d = Drags[i]
+        if InputEnded(d.inp) then
+            table.remove(Drags, i)
+            if d.fin then Run(d.fin) end
+        elseif d.move then
+            local ok, err = pcall(d.move, Ptr(d.inp))
+            if not ok and not failed[d.move] then failed[d.move] = true; warn("[UmbrellaFan] " .. tostring(err)) end
+        end
+    end
+    for gi = 1, #Groups do
+        local g = Groups[gi]
+        if g.on() then
+            local list = g.dyn
+            for i = 1, #list do Run(list[i]) end
+        end
+    end
+    Run(UpdateTip)
+    Run(UpdateToast)
+end
+Con(game:GetService("RunService").RenderStepped, Step)
